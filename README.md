@@ -1,50 +1,84 @@
+# SecureFlow
+
+SecureFlow is a backend-orchestrated payment security system where AI evaluates risk, the backend decides outcomes, and blockchain provides immutable auditability.
+
+---
+
+## 🧠 Overview
+
+SecureFlow is built with a strict separation of responsibilities:
+
+- **AI Service** evaluates fraud risk and returns advisory signals
+- **Backend** is the single decision authority
+- **Blockchain** (planned) provides immutable audit logs
+- **Database** stores operational and audit data
+
+No single component is trusted alone.  
+The backend orchestrates and enforces all decisions.
+
+---
+
+## 🏗 Monorepo Structure
+
+
 
 ---
 
 ## ⚙️ Tech Stack
 
-**Backend**
+### Backend
 - Node.js
 - TypeScript
 - Express
 - Prisma ORM
 - PostgreSQL
+- Zod (validation)
 
-**Planned**
-- Next.js (Frontend)
-- FastAPI (AI fraud detection)
-- Solidity + Hardhat (Blockchain)
-
----
-
-## 🚧 Project Status
-
-This project is currently under active development.
-
-### Implemented
-- Monorepo setup
-- Database schema and migrations
-- Backend architecture
-- Transaction creation and retrieval APIs
+### AI Service
+- Python
+- FastAPI
+- Pydantic
+- scikit-learn (planned)
 
 ### Planned
-- AI-based fraud detection
-- Blockchain transaction logging
-- Frontend integration
-- Security hardening and deployment
+- Solidity + Hardhat (Blockchain)
+- Next.js (Frontend)
 
 ---
 
-## 📌 Design Principles
+## 🔌 Services
 
-- Frontend is untrusted
-- AI is advisory, not authoritative
-- Backend is the single source of truth
-- Blockchain is used for proof, not computation
-- Business logic remains off-chain
+### Backend API
+- Handles transaction creation and retrieval
+- Validates input and enforces business rules
+- Orchestrates AI and blockchain integrations
+
+### AI Fraud Detection Service
+- Exposes an internal `/predict-risk` endpoint
+- Accepts transaction data
+- Returns:
+  - `risk_score` (0–1)
+  - `confidence`
+  - `explanation`
+- **Advisory only** — never approves or rejects transactions
+
+The AI service is **not exposed directly to clients**.
 
 ---
 
-## 📜 License
+## 🚀 Running Locally
 
-MIT
+### Prerequisites
+- Node.js (>=18)
+- Python (>=3.10)
+- PostgreSQL
+
+---
+
+### Backend Setup
+
+```bash
+cd backend
+npm install
+npm run dev
+
