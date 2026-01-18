@@ -3,6 +3,7 @@ import cors from "cors";
 import transactionRoutes from "./routes/transaction.routes";
 import { errorHandler } from "./middleware/error.middleware";
 
+
 const app = express();
 
 app.use(cors());
