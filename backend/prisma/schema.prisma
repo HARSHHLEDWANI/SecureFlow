@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String?
+  role      Role     @default(USER)
+  wallets   Wallet[]
+  createdAt DateTime @default(now())
+}
+
+model Wallet {
+  id      String @id @default(uuid())
+  address String @unique
+  network String
+  userId  String
+  user    User   @relation(fields: [userId], references: [id])
+}
+
+model Transaction {
+  id          String   @id @default(uuid())
+  fromWallet  String
+  toWallet    String
+  amount      Decimal
+  currency    String
+  status      TxStatus @default(PENDING)
+  riskScore   Float?
+  fraudScore  FraudScore?
+  blockchain  BlockchainRecord?
+  audits      AuditLog[]
+  createdAt   DateTime @default(now())
+}
+
+model FraudScore {
+  id             String @id @default(uuid())
+  transactionId  String @unique
+  score          Float
+  confidence     Float
+  explanation    String
+  modelVersionId String
+  transaction    Transaction @relation(fields: [transactionId], references: [id])
+  modelVersion   ModelVersion @relation(fields: [modelVersionId], references: [id])
+}
+
+model BlockchainRecord {
+  id            String @id @default(uuid())
+  transactionId String @unique
+  txHash        String @unique
+  blockNumber   Int
+  network       String
+  timestamp     DateTime
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
+}
+
+model AuditLog {
+  id            String @id @default(uuid())
+  transactionId String
+  action        String
+  actor         String
+  createdAt     DateTime @default(now())
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
+}
+
+model ModelVersion {
+  id        String @id @default(uuid())
+  name      String
+  active    Boolean @default(false)
+  createdAt DateTime @default(now())
+  scores    FraudScore[]
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum TxStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  FLAGGED
+}

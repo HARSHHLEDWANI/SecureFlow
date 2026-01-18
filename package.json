@@ -1,0 +1,8 @@
+{
+  "name": "secureflow",
+  "private": true,
+  "dependencies": {
+    "@prisma/client": "^6.19.2",
+    "prisma": "^6.19.2"
+  }
+}
