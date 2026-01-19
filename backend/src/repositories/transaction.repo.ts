@@ -5,6 +5,8 @@ export const create = async (data: {
   toWallet: string;
   amount: number;
   currency: string;
+  riskScore?: number;
+  status: "APPROVED" | "FLAGGED" | "REJECTED";
 }) => {
   return prisma.transaction.create({
     data: {
@@ -12,7 +14,8 @@ export const create = async (data: {
       toWallet: data.toWallet,
       amount: data.amount,
       currency: data.currency,
-      status: "PENDING",
+      riskScore: data.riskScore,
+      status: data.status,
     },
   });
 };
