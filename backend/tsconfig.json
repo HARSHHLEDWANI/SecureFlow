@@ -5,7 +5,7 @@
     "rootDir": "src",
     "outDir": "dist",
     "strict": true,
-
+    "resolveJsonModule": true,
     "esModuleInterop": true,        // 👈 REQUIRED
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true
