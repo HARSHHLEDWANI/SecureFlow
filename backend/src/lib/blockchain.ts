@@ -28,8 +28,15 @@ export const logAuditOnChain = async (params: {
   const tx = await auditLogContract.logAudit(
     ethers.id(params.transactionId),
     decisionMap[params.decision],
-    params.riskScore ?? 0
+    params.riskScore !== null
+      ? Math.floor(params.riskScore * 10_000)
+      : 0
   );
 
-  await tx.wait();
+  const receipt = await tx.wait();
+  console.log("Audit tx hash:", receipt.hash);
+  return {
+  txHash: receipt.hash,
+};
+
 };

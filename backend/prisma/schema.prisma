@@ -34,6 +34,8 @@ model Transaction {
   blockchain  BlockchainRecord?
   audits      AuditLog[]
   createdAt   DateTime @default(now())
+  auditTxHash  String?
+  auditedAt    DateTime?
 }
 
 model FraudScore {
