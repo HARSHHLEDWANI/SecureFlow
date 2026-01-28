@@ -3,9 +3,10 @@
   "private": true,
   "dependencies": {
     "@prisma/client": "^6.19.2",
+    "framer-motion": "^12.29.0",
     "prisma": "^6.19.2"
   },
-    "scripts": {
+  "scripts": {
     "prisma:migrate": "prisma migrate dev --schema backend/prisma/schema.prisma",
     "dev:backend": "nodemon --exec ts-node backend/src/server.ts"
   }

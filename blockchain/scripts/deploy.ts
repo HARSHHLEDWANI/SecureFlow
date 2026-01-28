@@ -8,7 +8,7 @@ async function main() {
 
   // Use first Hardhat account private key
   const privateKey =
-    "";
+    "0xdf57089febbacf7ba0bc227dafbffa9fc08a93fdc68e1e42411a14efcf23656e";
   const wallet = new ethers.Wallet(privateKey, provider);
 
   console.log("Deploying with account:", wallet.address);
