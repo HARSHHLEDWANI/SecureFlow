@@ -44,11 +44,11 @@ export default function ClientLayout({
             transition={{ duration: 0.3 }}
             className="fixed left-0 top-0 z-50 h-screen w-72 flex flex-col"
           >
-            <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-950 to-black border-r border-purple-500/20" />
+            <div className="absolute inset-0 bg-linear-to-br from-slate-900 via-slate-950 to-black border-r border-purple-500/20" />
             <div className="relative z-10 flex flex-col h-full p-6">
               {/* Logo */}
               <div className="flex items-center gap-3 mb-12">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 via-purple-500 to-pink-500 flex items-center justify-center">
+                <div className="w-10 h-10 rounded-xl bg-linear-to-br from-cyan-500 via-purple-500 to-pink-500 flex items-center justify-center">
                   <BarChart3 className="w-6 h-6 text-white" />
                 </div>
                 <div>
@@ -123,7 +123,7 @@ export default function ClientLayout({
             <span className="text-slate-400">Live Monitoring</span>
           </div>
 
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-500 via-purple-500 to-pink-500 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-full bg-linear-to-br from-cyan-500 via-purple-500 to-pink-500 flex items-center justify-center">
             <span className="text-white font-bold text-sm">U</span>
           </div>
         </header>

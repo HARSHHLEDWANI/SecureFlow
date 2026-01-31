@@ -126,7 +126,7 @@ export default function SettingsPage() {
     >
       {/* Header */}
       <motion.div variants={itemVariants}>
-        <h1 className="text-4xl font-bold bg-gradient-to-r from-zinc-900 to-zinc-700 bg-clip-text text-transparent">
+        <h1 className="text-4xl font-bold bg-linear-to-r from-zinc-900 to-zinc-700 bg-clip-text text-transparent">
           Settings
         </h1>
         <p className="text-zinc-600 mt-2">

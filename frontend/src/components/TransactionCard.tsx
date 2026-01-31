@@ -149,7 +149,7 @@ export function TransactionCard({ tx }: { tx: Transaction }) {
 
           <motion.div
             whileHover={{ scale: 1.02 }}
-            className="p-3 rounded-lg bg-gradient-to-br from-amber-50 to-amber-50/50 border border-amber-100/50"
+            className="p-3 rounded-lg bg-linear-to-br from-amber-50 to-amber-50/50 border border-amber-100/50"
           >
             <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider mb-1">Risk Score</p>
             <div className="flex items-center gap-2">

@@ -154,7 +154,7 @@ export default function TransactionList({ transactions }: Props) {
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
-              <tr className="bg-gradient-to-r from-zinc-50 to-white border-b border-zinc-200/50">
+              <tr className="bg-linear-to-r from-zinc-50 to-white border-b border-zinc-200/50">
                 <th className="px-6 py-4 text-xs font-semibold text-zinc-700 uppercase tracking-wider">
                   Status
                 </th>
