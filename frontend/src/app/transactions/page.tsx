@@ -1,12 +1,42 @@
 "use client";
+
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import type { Variants } from "framer-motion";
+
 import { fetchTransactions } from "@/lib/api";
 import { Transaction } from "@/types/transaction";
 import TransactionList from "@/components/TransactionList";
 import { CardSkeleton } from "@/components/LoadingSkeleton";
 import { useToast } from "@/components/Toast";
 import { Plus } from "lucide-react";
+
+/* ---------------- VARIANTS (FIXED & TYPED) ---------------- */
+
+const containerVariants: Variants = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.1,
+      delayChildren: 0.2,
+    },
+  },
+};
+
+const itemVariants: Variants = {
+  hidden: { opacity: 0, y: 20 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: {
+      duration: 0.4,
+      ease: [0.16, 1, 0.3, 1],
+    },
+  },
+};
+
+/* ---------------- PAGE ---------------- */
 
 export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -30,26 +60,6 @@ export default function TransactionsPage() {
     loadTransactions();
   }, [show]);
 
-  const containerVariants = {
-    hidden: { opacity: 0 },
-    visible: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.1,
-        delayChildren: 0.2,
-      },
-    },
-  };
-
-  const itemVariants = {
-    hidden: { opacity: 0, y: 20 },
-    visible: {
-      opacity: 1,
-      y: 0,
-      transition: { duration: 0.4, ease: "easeOut" },
-    },
-  };
-
   return (
     <motion.div
       variants={containerVariants}
@@ -58,7 +68,10 @@ export default function TransactionsPage() {
       className="space-y-8"
     >
       {/* Header */}
-      <motion.div variants={itemVariants} className="flex items-center justify-between">
+      <motion.div
+        variants={itemVariants}
+        className="flex items-center justify-between"
+      >
         <div>
           <h1 className="text-4xl font-bold bg-gradient-to-r from-zinc-900 to-zinc-700 bg-clip-text text-transparent">
             Transactions
@@ -67,6 +80,7 @@ export default function TransactionsPage() {
             View and manage all your blockchain transactions with real-time monitoring.
           </p>
         </div>
+
         <motion.button
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
@@ -78,7 +92,10 @@ export default function TransactionsPage() {
       </motion.div>
 
       {/* Stats Cards */}
-      <motion.div variants={itemVariants} className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <motion.div
+        variants={itemVariants}
+        className="grid grid-cols-1 md:grid-cols-3 gap-4"
+      >
         <StatCard
           title="Total Transactions"
           value={transactions.length.toString()}
@@ -93,10 +110,15 @@ export default function TransactionsPage() {
         />
         <StatCard
           title="Success Rate"
-          value={`${(
-            (transactions.filter((t) => t.status === "APPROVED").length / transactions.length) *
-            100
-          ).toFixed(1)}%`}
+          value={
+            transactions.length > 0
+              ? `${(
+                  (transactions.filter((t) => t.status === "APPROVED").length /
+                    transactions.length) *
+                  100
+                ).toFixed(1)}%`
+              : "0%"
+          }
           change="Last 30 days"
           color="emerald"
         />
@@ -120,7 +142,9 @@ export default function TransactionsPage() {
           >
             <div className="text-zinc-500">
               <p className="text-lg font-medium">No transactions found</p>
-              <p className="text-sm mt-1">Create your first transaction to get started</p>
+              <p className="text-sm mt-1">
+                Create your first transaction to get started
+              </p>
             </div>
           </motion.div>
         )}
@@ -128,6 +152,8 @@ export default function TransactionsPage() {
     </motion.div>
   );
 }
+
+/* ---------------- STAT CARD ---------------- */
 
 interface StatCardProps {
   title: string;
@@ -154,9 +180,13 @@ function StatCard({ title, value, change, color }: StatCardProps) {
       whileHover={{ y: -5 }}
       className={`${colors[color]} rounded-2xl p-6 border border-zinc-200/50`}
     >
-      <p className="text-sm font-medium text-zinc-600 uppercase tracking-wide">{title}</p>
+      <p className="text-sm font-medium text-zinc-600 uppercase tracking-wide">
+        {title}
+      </p>
       <p className="text-3xl font-bold text-zinc-900 mt-2">{value}</p>
-      <p className={`text-xs font-medium mt-3 ${textColors[color]}`}>{change}</p>
+      <p className={`text-xs font-medium mt-3 ${textColors[color]}`}>
+        {change}
+      </p>
     </motion.div>
   );
 }
