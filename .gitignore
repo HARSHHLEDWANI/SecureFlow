@@ -1,14 +1,30 @@
 # Node
 node_modules/
 dist/
+build/
+
+# Next.js
 .next/
 
 # Env
 .env
+.env.local
+.env.*.local
 
 # Python
 venv/
+.venv/
 __pycache__/
+*.pyc
+*.pyo
+
+# AI model artifacts (regenerate with train.py)
+ai-service/models/
+
+# Hardhat
+artifacts/
+cache/
+hardhat-ignition/deployments/
 
 # Logs
 logs/
@@ -16,3 +32,7 @@ logs/
 
 # OS
 .DS_Store
+Thumbs.db
+
+# TypeScript
+*.tsbuildinfo

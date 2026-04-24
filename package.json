@@ -1,13 +1,19 @@
 {
   "name": "secureflow",
   "private": true,
-  "dependencies": {
-    "@prisma/client": "^6.19.2",
-    "framer-motion": "^12.29.0",
-    "prisma": "^6.19.2"
-  },
+  "workspaces": [
+    "frontend",
+    "backend",
+    "ai-service"
+  ],
   "scripts": {
-    "prisma:migrate": "prisma migrate dev --schema backend/prisma/schema.prisma",
-    "dev:backend": "nodemon --exec ts-node backend/src/server.ts"
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "build:backend": "npm run build --workspace=backend",
+    "build:frontend": "npm run build --workspace=frontend",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
   }
 }

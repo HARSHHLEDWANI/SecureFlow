@@ -1,167 +1,126 @@
 # SecureFlow
 
-SecureFlow is a backend-orchestrated payment security system where AI evaluates risk, the backend decides outcomes, and blockchain provides immutable auditability.
+A payment fraud detection system. Transactions are scored by an ML model, logged immutably on-chain, and managed through a real-time dashboard.
 
 ---
 
-## 🧠 Overview
+## Architecture
 
-SecureFlow is built with a strict separation of responsibilities:
+```
+┌──────────────┐     POST /api/transactions      ┌─────────────────┐
+│   Next.js    │ ──────────────────────────────► │  Node/Express   │
+│  Frontend    │ ◄────────────────────────────── │    Backend      │
+│  (port 3000) │                                 │   (port 4000)   │
+└──────────────┘                                 └────────┬────────┘
+                                                          │
+                                      ┌───────────────────┼───────────────────┐
+                                      │                   │                   │
+                                      ▼                   ▼                   ▼
+                               ┌────────────┐    ┌──────────────┐    ┌──────────────┐
+                               │ PostgreSQL  │    │  AI Service  │    │   Sepolia    │
+                               │  (Prisma)  │    │  (FastAPI)   │    │  Blockchain  │
+                               │  port 5432 │    │  port 8000   │    │  (ethers.js) │
+                               └────────────┘    └──────────────┘    └──────────────┘
+```
 
-- **AI Service** evaluates fraud risk and returns advisory signals
-- **Backend** is the single decision authority
-- **Blockchain** (planned) provides immutable audit logs
-- **Database** stores operational and audit data
-
-No single component is trusted alone.  
-The backend orchestrates and enforces all decisions.
-
----
-
-## 🏗 Monorepo Structure
-
-
-
----
-
-## ⚙️ Tech Stack
-
-### Backend
-- Node.js
-- TypeScript
-- Express
-- Prisma ORM
-- PostgreSQL
-- Zod (validation)
-
-### AI Service
-- Python
-- FastAPI
-- Pydantic
-- scikit-learn (planned)
-
-### Planned
-- Solidity + Hardhat (Blockchain)
-- Next.js (Frontend)
+**Trust model:** Backend is the single decision authority. AI service is advisory only. Blockchain provides tamper-proof audit records. No component is trusted alone.
 
 ---
 
-## 🔌 Services
+## Tech Stack
 
-### Backend API
-- Handles transaction creation and retrieval
-- Validates input and enforces business rules
-- Orchestrates AI and blockchain integrations
-
-### AI Fraud Detection Service
-- Exposes an internal `/predict-risk` endpoint
-- Accepts transaction data
-- Returns:
-  - `risk_score` (0–1)
-  - `confidence`
-  - `explanation`
-- **Advisory only** — never approves or rejects transactions
-
-The AI service is **not exposed directly to clients**.
+| Layer       | Technology                                          |
+|-------------|-----------------------------------------------------|
+| Frontend    | Next.js 16, React 19, Tailwind CSS, Recharts        |
+| Backend     | Node.js, TypeScript, Express, Prisma ORM            |
+| Database    | PostgreSQL 16                                       |
+| AI Service  | Python 3.11, FastAPI, scikit-learn (RandomForest)   |
+| Blockchain  | Solidity 0.8.28, Hardhat, ethers.js, Sepolia testnet|
 
 ---
 
-## 🚀 Running Locally
+## Running Locally
 
 ### Prerequisites
-- Node.js (>=18)
-- Python (>=3.10)
-- PostgreSQL
 
----
+- Node.js >= 18
+- Python >= 3.11
+- PostgreSQL 16 running locally
+- A `.env` file in `/backend` (copy from `.env.example`)
 
-### Backend Setup
+### 1. Backend
 
 ```bash
 cd backend
 npm install
-npm run dev
+npx prisma migrate dev
+npx prisma db seed
+npm run dev           # starts on port 4000
+```
 
-Environment Variables
+### 2. AI Service
 
-Create a .env file at the project root (not inside backend):
+```bash
+cd ai-service
+python -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+python app/train.py        # generates models/fraud_model.joblib
+uvicorn app.main:app --reload --port 8000
+```
 
-DATABASE_URL=postgresql://postgres:password@localhost:5432/secureflow
+### 3. Frontend
 
-Run Database Migrations
-npx prisma migrate dev --schema backend/prisma/schema.prisma
+```bash
+cd frontend
+npm install
+cp .env.local.example .env.local   # set NEXT_PUBLIC_API_URL
+npm run dev           # starts on port 3000
+```
 
-Start the Backend Server
-npm run dev
+---
 
+## Environment Variables
 
-The backend will start on:
+| Variable              | Service  | Description                           |
+|-----------------------|----------|---------------------------------------|
+| `DATABASE_URL`        | backend  | PostgreSQL connection string          |
+| `JWT_SECRET`          | backend  | Secret for signing access tokens      |
+| `JWT_REFRESH_SECRET`  | backend  | Secret for signing refresh tokens     |
+| `AI_SERVICE_URL`      | backend  | URL of the Python AI service          |
+| `CONTRACT_ADDRESS`    | backend  | Deployed AuditLog contract address    |
+| `SEPOLIA_RPC_URL`     | backend  | Alchemy/Infura Sepolia RPC URL        |
+| `FRONTEND_URL`        | backend  | Allowed CORS origin (Vercel URL)      |
+| `PORT`                | backend  | HTTP port (default: 4000)             |
+| `NEXT_PUBLIC_API_URL` | frontend | Backend API base URL                  |
 
-http://localhost:4000
+---
 
-🔌 Backend API Endpoints
-Create Transaction
-POST /transactions
+## What's Implemented
 
+- [x] PostgreSQL schema with User, Transaction, AuditLog, ApiKey models
+- [x] JWT auth (access + refresh tokens)
+- [x] Full CRUD API for transactions and audit logs
+- [x] RandomForest ML model for fraud scoring
+- [x] Feature engineering pipeline (amount, wallet entropy, velocity, etc.)
+- [x] AuditLog Solidity contract deployed on Sepolia testnet
+- [x] Blockchain audit logging wired into transaction creation
+- [x] Next.js dashboard with real data (no mock data)
+- [x] Role-based access (ADMIN, ANALYST, VIEWER)
+- [x] API key authentication for external integrations
+- [x] Docker Compose for local development
+- [x] GitHub Actions CI
 
-Request body:
+## What's Planned
 
-{
-  "fromWallet": "0xabc",
-  "toWallet": "0xdef",
-  "amount": 250,
-  "currency": "USD"
-}
+- [ ] WebSocket real-time alerts
+- [ ] Multi-wallet portfolio view
+- [ ] SAML/SSO integration
 
+---
 
-Response:
+## Live Demo
 
-201 Created
-
-Transaction stored with status PENDING
-
-Get Transactions
-GET /transactions
-
-
-Response:
-
-List of all transactions
-
-Sorted by most recent first
-
-🤖 AI Service Integration (Internal)
-
-The backend communicates with a separate AI service for fraud risk evaluation.
-
-The AI service exposes /predict-risk
-
-The backend calls this endpoint internally
-
-The AI does not approve or reject transactions
-
-The backend makes all final decisions
-
-The AI service is not exposed directly to clients.
-
-📈 Execution Flow
-
-Client sends transaction request to backend
-
-Backend validates input and stores transaction
-
-Backend requests fraud risk from AI service
-
-Backend decides transaction outcome
-
-(Planned) Blockchain records immutable proof
-
-🧪 Testing the Backend
-
-Invalid input returns 400 Bad Request
-
-Valid transactions are persisted in the database
-
-All errors are handled centrally
-
-The backend acts as the single source of truth for the system.
+- Frontend: https://secure-flow-inky.vercel.app
+- Backend: deployed on Railway
+- Contract: verified on Sepolia Etherscan
