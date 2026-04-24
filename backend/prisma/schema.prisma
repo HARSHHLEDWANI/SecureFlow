@@ -1,89 +1,75 @@
 generator client {
   provider = "prisma-client-js"
 }
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String?
-  role      Role     @default(USER)
-  wallets   Wallet[]
-  createdAt DateTime @default(now())
-}
-
-model Wallet {
-  id      String @id @default(uuid())
-  address String @unique
-  network String
-  userId  String
-  user    User   @relation(fields: [userId], references: [id])
+  id           String        @id @default(uuid())
+  email        String        @unique
+  passwordHash String
+  role         Role          @default(VIEWER)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  transactions Transaction[]
+  auditLogs    AuditLog[]    @relation("AuditActor")
+  apiKeys      ApiKey[]
 }
 
 model Transaction {
-  id          String   @id @default(uuid())
-  fromWallet  String
-  toWallet    String
-  amount      Decimal
-  currency    String
-  status      TxStatus @default(PENDING)
-  riskScore   Float?
-  fraudScore  FraudScore?
-  blockchain  BlockchainRecord?
-  audits      AuditLog[]
-  createdAt   DateTime @default(now())
-  auditTxHash  String?
-  auditedAt    DateTime?
-}
-
-model FraudScore {
-  id             String @id @default(uuid())
-  transactionId  String @unique
-  score          Float
-  confidence     Float
-  explanation    String
-  modelVersionId String
-  transaction    Transaction @relation(fields: [transactionId], references: [id])
-  modelVersion   ModelVersion @relation(fields: [modelVersionId], references: [id])
-}
-
-model BlockchainRecord {
-  id            String @id @default(uuid())
-  transactionId String @unique
-  txHash        String @unique
-  blockNumber   Int
-  network       String
-  timestamp     DateTime
-  transaction   Transaction @relation(fields: [transactionId], references: [id])
+  id            String      @id @default(uuid())
+  fromWallet    String
+  toWallet      String
+  amount        Decimal
+  currency      String
+  status        TxStatus    @default(PENDING)
+  riskScore     Float?
+  confidence    Float?
+  aiExplanation String?
+  auditTxHash   String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  userId        String
+  user          User        @relation(fields: [userId], references: [id])
+  auditLogs     AuditLog[]
 }
 
 model AuditLog {
-  id            String @id @default(uuid())
-  transactionId String
-  action        String
-  actor         String
-  createdAt     DateTime @default(now())
-  transaction   Transaction @relation(fields: [transactionId], references: [id])
+  id              String      @id @default(uuid())
+  transactionId   String
+  action          String
+  actorId         String
+  riskScore       Float?
+  blockchainHash  String?
+  metadata        Json?
+  createdAt       DateTime    @default(now())
+  transaction     Transaction @relation(fields: [transactionId], references: [id])
+  actor           User        @relation("AuditActor", fields: [actorId], references: [id])
 }
 
-model ModelVersion {
-  id        String @id @default(uuid())
-  name      String
-  active    Boolean @default(false)
-  createdAt DateTime @default(now())
-  scores    FraudScore[]
+model ApiKey {
+  id         String    @id @default(uuid())
+  userId     String
+  hashedKey  String    @unique
+  name       String
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id])
 }
 
 enum Role {
-  USER
   ADMIN
+  ANALYST
+  VIEWER
 }
 
 enum TxStatus {
   PENDING
   APPROVED
-  REJECTED
   FLAGGED
+  REJECTED
 }
