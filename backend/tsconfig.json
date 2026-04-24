@@ -6,8 +6,10 @@
     "outDir": "dist",
     "strict": true,
     "resolveJsonModule": true,
-    "esModuleInterop": true,        // 👈 REQUIRED
+    "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true
-  }
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
 }

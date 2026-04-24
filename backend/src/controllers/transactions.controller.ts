@@ -22,8 +22,12 @@ export async function list(req: Request, res: Response, next: NextFunction) {
   try {
     const limit = Math.min(Number(req.query.limit ?? 20), 100);
     const cursor = req.query.cursor as string | undefined;
-    const status = req.query.status as TxStatus | undefined;
-    const currency = req.query.currency as string | undefined;
+    const status = req.query.status
+      ? (String(req.query.status) as TxStatus)
+      : undefined;
+    const currency = req.query.currency
+      ? String(req.query.currency)
+      : undefined;
 
     const result = await txService.listTransactions({ cursor, limit, status, currency });
     res.json({
@@ -39,7 +43,7 @@ export async function list(req: Request, res: Response, next: NextFunction) {
 
 export async function getById(req: Request, res: Response, next: NextFunction) {
   try {
-    const tx = await txService.getTransactionById(req.params.id);
+    const tx = await txService.getTransactionById(String(req.params.id));
     res.json({ success: true, data: tx, error: null });
   } catch (err) {
     next(err);
@@ -50,7 +54,7 @@ export async function updateStatus(req: Request, res: Response, next: NextFuncti
   try {
     const status = req.body.status as TxStatus;
     const tx = await txService.updateTransactionStatus(
-      req.params.id,
+      String(req.params.id),
       status,
       req.user!.userId
     );

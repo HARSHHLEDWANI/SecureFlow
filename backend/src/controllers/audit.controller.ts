@@ -4,8 +4,8 @@ import * as auditService from "../services/audit.service";
 export async function list(req: Request, res: Response, next: NextFunction) {
   try {
     const limit = Math.min(Number(req.query.limit ?? 20), 100);
-    const cursor = req.query.cursor as string | undefined;
-    const action = req.query.action as string | undefined;
+    const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
+    const action = req.query.action ? String(req.query.action) : undefined;
 
     const result = await auditService.listAuditLogs({ cursor, limit, action });
     res.json({

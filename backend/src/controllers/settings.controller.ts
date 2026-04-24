@@ -35,7 +35,7 @@ export async function createApiKey(req: Request, res: Response, next: NextFuncti
 
 export async function revokeApiKey(req: Request, res: Response, next: NextFunction) {
   try {
-    await settingsService.revokeApiKey(req.user!.userId, req.params.id);
+    await settingsService.revokeApiKey(req.user!.userId, String(req.params.id));
     res.json({ success: true, data: null, error: null });
   } catch (err) {
     next(err);

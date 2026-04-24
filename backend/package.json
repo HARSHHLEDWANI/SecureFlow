@@ -5,8 +5,8 @@
     "dev": "nodemon --exec ts-node src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "jest --forceExit",
-    "test:watch": "jest --watch"
+    "test": "NODE_ENV=test jest --forceExit",
+    "test:watch": "NODE_ENV=test jest --watch"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
@@ -15,7 +15,9 @@
     "@prisma/client": "^6.0.0",
     "axios": "^1.13.2",
     "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
     "ethers": "^6.16.0",
     "express": "^5.2.1",
     "express-rate-limit": "^7.5.0",
@@ -28,6 +30,7 @@
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
+    "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jest": "^29.5.14",
