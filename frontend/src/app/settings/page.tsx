@@ -1,259 +1,234 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import type { Variants } from "framer-motion";
-
+import { useRouter } from "next/navigation";
+import { Copy, Trash2, Plus, Eye, EyeOff, Check } from "lucide-react";
+import { useAuth } from "@/context/auth";
 import {
   fetchUserSettings,
   updateUserSettings,
   generateApiKey,
+  revokeApiKey,
+  UserSettings,
 } from "@/lib/api";
-import { useToast } from "@/components/Toast";
-import {
-  Copy,
-  Plus,
-  Trash2,
-  Eye,
-  EyeOff,
-  Save,
-} from "lucide-react";
-
-/* ---------------- TYPES ---------------- */
-
-interface UserSettings {
-  id: string;
-  email: string;
-  riskThreshold: number;
-  notificationsEnabled: boolean;
-  twoFactorEnabled: boolean;
-  apiKeys: string[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-/* ---------------- VARIANTS (FIXED & TYPED) ---------------- */
-
-const containerVariants: Variants = {
-  hidden: { opacity: 0 },
-  visible: {
-    opacity: 1,
-    transition: {
-      staggerChildren: 0.1,
-      delayChildren: 0.2,
-    },
-  },
-};
-
-const itemVariants: Variants = {
-  hidden: { opacity: 0, y: 20 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: {
-      duration: 0.4,
-      ease: [0.16, 1, 0.3, 1],
-    },
-  },
-};
-
-/* ---------------- PAGE ---------------- */
 
 export default function SettingsPage() {
+  const { user, loading } = useAuth();
+  const router = useRouter();
+
   const [settings, setSettings] = useState<UserSettings | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [formData, setFormData] = useState<Partial<UserSettings>>({});
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [newApiKey, setNewApiKey] = useState<string | null>(null);
-  const { show } = useToast();
+  const [email, setEmail] = useState("");
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const [newKeyName, setNewKeyName] = useState("");
+  const [generatingKey, setGeneratingKey] = useState(false);
+  const [revealedKey, setRevealedKey] = useState<{ id: string; key: string } | null>(null);
+  const [showKey, setShowKey] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    const loadSettings = async () => {
-      try {
-        setLoading(true);
-        const data = await fetchUserSettings();
-        if (data) {
-          setSettings(data);
-          setFormData(data);
-        }
-      } catch (error) {
-        console.error("Error loading settings:", error);
-        show("Error", "Failed to load settings", "error");
-      } finally {
-        setLoading(false);
-      }
-    };
+    if (!loading && !user) router.replace("/auth");
+  }, [user, loading, router]);
 
-    loadSettings();
-  }, [show]);
+  useEffect(() => {
+    if (!user) return;
+    fetchUserSettings()
+      .then((s) => {
+        setSettings(s);
+        setEmail(s.email);
+      })
+      .finally(() => setDataLoading(false));
+  }, [user]);
 
-  const handleSaveSettings = async () => {
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setSaveMsg(null);
+    setSaveError(null);
     try {
-      setSaving(true);
-      await updateUserSettings(formData);
-      show("Success", "Settings updated successfully", "success");
-    } catch (error) {
-      console.error("Error saving settings:", error);
-      show("Error", "Failed to save settings", "error");
+      const updated = await updateUserSettings({ email });
+      setSettings((s) => s ? { ...s, ...updated } : s);
+      setSaveMsg("Profile updated successfully.");
+    } catch (err) {
+      setSaveError((err as Error).message);
     } finally {
       setSaving(false);
     }
-  };
+  }
 
-  const handleGenerateApiKey = async () => {
+  async function handleGenerateKey(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newKeyName.trim()) return;
+    setGeneratingKey(true);
     try {
-      const response = await generateApiKey();
-      setNewApiKey(response.key);
-      show("Success", "API key generated successfully", "success");
-    } catch (error) {
-      console.error("Error generating API key:", error);
-      show("Error", "Failed to generate API key", "error");
+      const result = await generateApiKey(newKeyName.trim());
+      setRevealedKey({ id: result.id, key: result.key });
+      setSettings((s) =>
+        s
+          ? {
+              ...s,
+              apiKeys: [
+                { id: result.id, name: result.name, createdAt: result.createdAt, lastUsedAt: null, expiresAt: null },
+                ...s.apiKeys,
+              ],
+            }
+          : s
+      );
+      setNewKeyName("");
+    } catch (err) {
+      setSaveError((err as Error).message);
+    } finally {
+      setGeneratingKey(false);
     }
-  };
+  }
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    show("Copied", "Copied to clipboard", "success");
-  };
+  async function handleRevoke(keyId: string) {
+    try {
+      await revokeApiKey(keyId);
+      setSettings((s) => s ? { ...s, apiKeys: s.apiKeys.filter((k) => k.id !== keyId) } : s);
+      if (revealedKey?.id === keyId) setRevealedKey(null);
+    } catch (err) {
+      setSaveError((err as Error).message);
+    }
+  }
+
+  async function copyKey(key: string) {
+    await navigator.clipboard.writeText(key);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  if (loading || dataLoading) {
+    return (
+      <div className="space-y-4">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="h-32 bg-slate-800/40 rounded-xl animate-pulse" />
+        ))}
+      </div>
+    );
+  }
 
   return (
-    <motion.div
-      variants={containerVariants}
-      initial="hidden"
-      animate="visible"
-      className="space-y-8"
-    >
-      {/* Header */}
-      <motion.div variants={itemVariants}>
-        <h1 className="text-4xl font-bold bg-linear-to-r from-zinc-900 to-zinc-700 bg-clip-text text-transparent">
-          Settings
-        </h1>
-        <p className="text-zinc-600 mt-2">
-          Manage your account, preferences, and API keys.
-        </p>
-      </motion.div>
+    <div className="space-y-6 max-w-2xl">
+      <div>
+        <h1 className="text-2xl font-bold text-white">Settings</h1>
+        <p className="text-slate-400 text-sm mt-1">Manage your profile and API access</p>
+      </div>
 
-      {loading ? (
-        <div className="h-48 bg-gradient-to-r from-zinc-200 to-zinc-100 rounded-2xl animate-pulse" />
-      ) : (
-        <div className="space-y-6">
-          {/* Account */}
-          <motion.section variants={itemVariants} className="space-y-6">
-            <h2 className="text-2xl font-bold text-zinc-900">Account</h2>
-
-            <div className="glass rounded-2xl p-6 border space-y-6">
-              <div>
-                <label className="text-sm font-semibold text-zinc-700 mb-2 block">
-                  Email
-                </label>
-                <input
-                  type="email"
-                  value={formData.email || ""}
-                  onChange={(e) =>
-                    setFormData({ ...formData, email: e.target.value })
-                  }
-                  className="w-full px-4 py-2 border rounded-lg"
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-semibold text-zinc-700 mb-2 block">
-                  Member Since
-                </label>
-                <input
-                  disabled
-                  value={
-                    settings?.createdAt
-                      ? new Date(settings.createdAt).toLocaleDateString()
-                      : ""
-                  }
-                  className="w-full px-4 py-2 bg-zinc-50 border rounded-lg"
-                />
-              </div>
-            </div>
-          </motion.section>
-
-          {/* Preferences */}
-          <motion.section variants={itemVariants} className="space-y-6">
-            <h2 className="text-2xl font-bold text-zinc-900">Preferences</h2>
-
-            <div className="glass rounded-2xl p-6 border space-y-6">
-              <div>
-                <div className="flex justify-between mb-3">
-                  <label className="font-semibold">Risk Threshold</label>
-                  <span className="font-bold text-blue-600">
-                    {formData.riskThreshold || 0}%
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={formData.riskThreshold || 0}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      riskThreshold: Number(e.target.value),
-                    })
-                  }
-                  className="w-full"
-                />
-              </div>
-            </div>
-          </motion.section>
-
-          {/* API Keys */}
-          <motion.section variants={itemVariants} className="space-y-6">
-            <div className="flex justify-between">
-              <h2 className="text-2xl font-bold text-zinc-900">API Keys</h2>
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={handleGenerateApiKey}
-                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg"
-              >
-                <Plus className="w-4 h-4" />
-                Generate
-              </motion.button>
-            </div>
-
-            {newApiKey && (
-              <motion.div
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="p-4 bg-emerald-50 border rounded-lg"
-              >
-                <code className="text-xs break-all">
-                  {showApiKey ? newApiKey : "•".repeat(32)}
-                </code>
-                <div className="flex gap-2 mt-2">
-                  <button onClick={() => setShowApiKey(!showApiKey)}>
-                    {showApiKey ? <EyeOff /> : <Eye />}
-                  </button>
-                  <button onClick={() => copyToClipboard(newApiKey)}>
-                    <Copy />
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </motion.section>
-
-          {/* Save */}
-          <motion.div variants={itemVariants} className="flex justify-end">
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={handleSaveSettings}
-              disabled={saving}
-              className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg"
-            >
-              <Save className="w-4 h-4" />
-              Save Changes
-            </motion.button>
-          </motion.div>
+      {saveError && (
+        <div className="px-4 py-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+          {saveError}
         </div>
       )}
-    </motion.div>
+
+      {/* Profile */}
+      <form
+        onSubmit={handleSave}
+        className="bg-slate-900/60 border border-slate-700/40 rounded-xl p-6 space-y-4"
+      >
+        <h2 className="text-base font-semibold text-white">Account</h2>
+        <div className="space-y-1">
+          <label className="text-sm text-slate-400">Email</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full px-3 py-2 bg-slate-800 border border-slate-700/40 rounded-lg text-sm text-white focus:outline-none focus:border-cyan-500/50"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <div>
+            <p className="text-slate-400 mb-1">Role</p>
+            <p className="text-white font-medium">{settings?.role}</p>
+          </div>
+          <div>
+            <p className="text-slate-400 mb-1">Member since</p>
+            <p className="text-white">{settings ? new Date(settings.createdAt).toLocaleDateString() : "—"}</p>
+          </div>
+        </div>
+        {saveMsg && <p className="text-emerald-400 text-sm">{saveMsg}</p>}
+        <button
+          type="submit"
+          disabled={saving}
+          className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-60 text-slate-900 font-semibold rounded-lg text-sm transition-colors"
+        >
+          {saving ? "Saving…" : "Save Changes"}
+        </button>
+      </form>
+
+      {/* API Keys */}
+      <div className="bg-slate-900/60 border border-slate-700/40 rounded-xl p-6 space-y-4">
+        <h2 className="text-base font-semibold text-white">API Keys</h2>
+        <p className="text-slate-400 text-sm">
+          API keys allow external integrations to authenticate without logging in.
+          The plaintext key is shown only once upon creation.
+        </p>
+
+        {/* Revealed key banner */}
+        {revealedKey && (
+          <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-2">
+            <p className="text-amber-400 text-sm font-medium">Save this key — it won't be shown again.</p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 text-xs text-white break-all font-mono">
+                {showKey ? revealedKey.key : "•".repeat(48)}
+              </code>
+              <button onClick={() => setShowKey((v) => !v)} className="text-slate-400 hover:text-white">
+                {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+              <button onClick={() => copyKey(revealedKey.key)} className="text-slate-400 hover:text-white">
+                {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Generate new key */}
+        <form onSubmit={handleGenerateKey} className="flex gap-2">
+          <input
+            type="text"
+            placeholder="Key name (e.g. CI pipeline)"
+            value={newKeyName}
+            onChange={(e) => setNewKeyName(e.target.value)}
+            className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700/40 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+          />
+          <button
+            type="submit"
+            disabled={generatingKey || !newKeyName.trim()}
+            className="flex items-center gap-1.5 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-60 text-slate-900 font-semibold rounded-lg text-sm transition-colors"
+          >
+            <Plus className="w-4 h-4" /> Generate
+          </button>
+        </form>
+
+        {/* Existing keys */}
+        {settings && settings.apiKeys.length === 0 ? (
+          <p className="text-slate-500 text-sm">No API keys yet.</p>
+        ) : (
+          <div className="divide-y divide-slate-700/40">
+            {settings?.apiKeys.map((key) => (
+              <div key={key.id} className="flex items-center justify-between py-3">
+                <div>
+                  <p className="text-white text-sm font-medium">{key.name}</p>
+                  <p className="text-slate-500 text-xs mt-0.5">
+                    Created {new Date(key.createdAt).toLocaleDateString()}
+                    {key.lastUsedAt && ` · Last used ${new Date(key.lastUsedAt).toLocaleDateString()}`}
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleRevoke(key.id)}
+                  className="p-1.5 text-slate-400 hover:text-red-400 transition-colors"
+                  title="Revoke key"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BarChart3,
@@ -16,12 +17,16 @@ import {
 } from "lucide-react";
 import { ToastContainer } from "@/components/Toast";
 import { useState } from "react";
+import { useAuth } from "@/context/auth";
 
 export default function ClientLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { user, logout } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [hoveredNav, setHoveredNav] = useState<string | null>(null);
 
@@ -31,6 +36,23 @@ export default function ClientLayout({
     { href: "/audit", label: "Audit Logs", icon: FileText },
     { href: "/settings", label: "Settings", icon: Cog },
   ];
+
+  async function handleSignOut() {
+    await logout();
+    router.push("/auth");
+  }
+
+  // Render children without chrome on auth route
+  if (pathname === "/auth") {
+    return (
+      <>
+        {children}
+        <ToastContainer />
+      </>
+    );
+  }
+
+  const userInitial = user?.email?.[0]?.toUpperCase() ?? "U";
 
   return (
     <div className="flex min-h-screen bg-slate-950">
@@ -61,6 +83,7 @@ export default function ClientLayout({
               <nav className="flex-1 space-y-3">
                 {navItems.map((item) => {
                   const Icon = item.icon;
+                  const isActive = pathname === item.href;
                   const isHovered = hoveredNav === item.href;
 
                   return (
@@ -70,10 +93,18 @@ export default function ClientLayout({
                       onMouseLeave={() => setHoveredNav(null)}
                     >
                       <Link href={item.href}>
-                        <div className="relative px-4 py-3 rounded-xl flex items-center gap-3 hover:bg-purple-500/10 transition">
-                          <Icon className="w-5 h-5 text-purple-400" />
-                          <span className="text-slate-300">{item.label}</span>
-                          {isHovered && (
+                        <div
+                          className={`relative px-4 py-3 rounded-xl flex items-center gap-3 transition ${
+                            isActive
+                              ? "bg-purple-500/20 text-white"
+                              : "hover:bg-purple-500/10"
+                          }`}
+                        >
+                          <Icon className={`w-5 h-5 ${isActive ? "text-cyan-400" : "text-purple-400"}`} />
+                          <span className={isActive ? "text-white font-medium" : "text-slate-300"}>
+                            {item.label}
+                          </span>
+                          {isHovered && !isActive && (
                             <ChevronRight className="ml-auto w-4 h-4 text-cyan-400" />
                           )}
                         </div>
@@ -89,7 +120,10 @@ export default function ClientLayout({
                   <Bell className="w-5 h-5 text-purple-400" />
                   Notifications
                 </button>
-                <button className="w-full px-4 py-3 rounded-xl flex items-center gap-3 text-red-400 hover:bg-red-500/10">
+                <button
+                  onClick={handleSignOut}
+                  className="w-full px-4 py-3 rounded-xl flex items-center gap-3 text-red-400 hover:bg-red-500/10 transition-colors"
+                >
                   <LogOut className="w-5 h-5" />
                   Sign Out
                 </button>
@@ -123,8 +157,11 @@ export default function ClientLayout({
             <span className="text-slate-400">Live Monitoring</span>
           </div>
 
-          <div className="w-10 h-10 rounded-full bg-linear-to-br from-cyan-500 via-purple-500 to-pink-500 flex items-center justify-center">
-            <span className="text-white font-bold text-sm">U</span>
+          <div
+            className="w-10 h-10 rounded-full bg-linear-to-br from-cyan-500 via-purple-500 to-pink-500 flex items-center justify-center cursor-pointer"
+            title={user?.email}
+          >
+            <span className="text-white font-bold text-sm">{userInitial}</span>
           </div>
         </header>
 
