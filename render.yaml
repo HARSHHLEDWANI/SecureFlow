@@ -1,0 +1,41 @@
+# Render blueprint: FastAPI backend + managed Redis.
+# Deploy the frontend separately on Vercel (see frontend/vercel.json).
+services:
+  - type: web
+    name: secureflow-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt && python -m app.ml.training
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false   # set to your Vercel URL, e.g. https://secure-flow-inky.vercel.app
+      - key: DATABASE_URL
+        fromDatabase:
+          name: secureflow-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: secureflow-redis
+          type: redis
+          property: connectionString
+
+  - type: redis
+    name: secureflow-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []
+
+databases:
+  - name: secureflow-db
+    plan: free

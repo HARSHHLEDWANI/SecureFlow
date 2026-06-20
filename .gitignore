@@ -17,14 +17,15 @@ venv/
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
 
-# AI model artifacts (regenerate with train.py)
-ai-service/models/
-
-# Hardhat
-artifacts/
-cache/
-hardhat-ignition/deployments/
+# Backend runtime data (regenerate the model with `python -m app.ml.training`)
+backend/data/*.db
+backend/data/*.db-journal
+backend/data/chain.json
+backend/data/*.joblib
+backend/data/model_metrics.json
+backend/data/smoke*
 
 # Logs
 logs/
@@ -36,3 +37,9 @@ Thumbs.db
 
 # TypeScript
 *.tsbuildinfo
+
+# Markdown docs (architecture, audit report, plans, summaries — kept local only)
+*.md
+
+# Claude Code workspace
+.claude/

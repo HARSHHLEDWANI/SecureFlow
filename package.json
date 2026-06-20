@@ -1,19 +1,15 @@
 {
   "name": "secureflow",
+  "version": "2.0.0",
   "private": true,
-  "workspaces": [
-    "frontend",
-    "backend",
-    "ai-service"
-  ],
+  "description": "Fraud detection for UPI transactions via ML, Redis, and a custom blockchain audit trail.",
   "scripts": {
-    "dev:backend": "npm run dev --workspace=backend",
-    "dev:frontend": "npm run dev --workspace=frontend",
-    "build:backend": "npm run build --workspace=backend",
-    "build:frontend": "npm run build --workspace=frontend",
-    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\""
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "frontend:install": "npm --prefix frontend install",
+    "backend:dev": "cd backend && uvicorn app.main:app --reload --port 8000",
+    "backend:train": "cd backend && python -m app.ml.training",
+    "backend:test": "cd backend && pytest -q"
   },
-  "devDependencies": {
-    "concurrently": "^8.2.2"
-  }
+  "license": "MIT"
 }
