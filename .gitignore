@@ -40,6 +40,8 @@ Thumbs.db
 
 # Markdown docs (architecture, audit report, plans, summaries — kept local only)
 *.md
+# …except the main README at the repo root, which we do publish
+!/README.md
 
 # Claude Code workspace
 .claude/
