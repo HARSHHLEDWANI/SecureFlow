@@ -10,7 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import type { ModelMetrics } from "@/lib/types";
 import { EmptyState, Panel, Skeleton, StatCard } from "@/components/ui";
 
@@ -19,12 +19,16 @@ const CHART_AXIS = { fontSize: 11, fill: "var(--text-dim)" };
 export default function AnalyticsPage() {
   const [metrics, setMetrics] = useState<ModelMetrics | null>(null);
   const [loading, setLoading] = useState(true);
+  const [forbidden, setForbidden] = useState(false);
 
   useEffect(() => {
     api
       .modelMetrics()
       .then(setMetrics)
-      .catch(() => setMetrics(null))
+      .catch((e) => {
+        if (e instanceof ApiError && e.status === 403) setForbidden(true);
+        setMetrics(null);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -44,10 +48,14 @@ export default function AnalyticsPage() {
 
   if (!metrics) {
     return (
-      <Panel title="Model performance">
+      <Panel title={forbidden ? "Access restricted" : "Model performance"}>
         <EmptyState
-          title="Model metrics unavailable"
-          hint="Train the model (python -m app.ml.training) to populate metrics."
+          title={forbidden ? "Analytics require an analyst or admin role" : "Model metrics unavailable"}
+          hint={
+            forbidden
+              ? "Sign in with an analyst/admin account to view model analytics."
+              : "Train the model (python -m app.ml.training) to populate metrics."
+          }
         />
       </Panel>
     );
