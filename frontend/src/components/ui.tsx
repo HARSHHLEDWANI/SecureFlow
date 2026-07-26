@@ -1,8 +1,39 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { useReducedMotion } from "framer-motion";
 import type { RiskTier } from "@/lib/types";
 import { TIER_META } from "@/lib/format";
+
+/** Animated count-up to a numeric target (snaps instantly for reduced-motion). */
+export function CountUp({
+  value,
+  duration = 0.9,
+  format,
+}: {
+  value: number;
+  duration?: number;
+  format?: (n: number) => string;
+}) {
+  const reduce = useReducedMotion();
+  const [display, setDisplay] = useState(0);
+
+  useEffect(() => {
+    const dur = reduce ? 0 : duration;
+    const start = performance.now();
+    let raf = 0;
+    const tick = (t: number) => {
+      const p = dur <= 0 ? 1 : Math.min((t - start) / (dur * 1000), 1);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setDisplay(value * eased);
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value, duration, reduce]);
+
+  return <>{format ? format(display) : Math.round(display).toLocaleString()}</>;
+}
 
 export function Panel({
   children,

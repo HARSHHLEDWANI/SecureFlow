@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { Check, Loader2, Cpu, Boxes, ShieldAlert, Gauge, ScanLine, Flag, Play } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type { PipelineSnapshot, UpiPayResult } from "@/lib/types";
 import { DECISION_META, STAGE_LABELS } from "@/lib/labFormat";
 import { formatINR, shortHash } from "@/lib/format";
 
-const STAGE_ICONS: Record<string, React.ElementType> = {
+const STAGE_ICONS: Record<string, LucideIcon> = {
   initiated: Play,
   validated: ScanLine,
   features_extracted: Cpu,

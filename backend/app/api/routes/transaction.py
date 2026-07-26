@@ -16,7 +16,7 @@ from app.core.pipeline import (
 )
 from app.core.redis_client import redis_client
 from app.database import RiskTier, Transaction, User, get_db
-from app.dependencies import RateLimiter, envelope, get_current_user
+from app.dependencies import RateLimiter, envelope, get_current_user, is_staff
 from app.models.transaction import (
     TransactionAnalyzeRequest,
     TransactionResult,
@@ -88,9 +88,14 @@ def transaction_status(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    """Fetch a stored transaction analysis result."""
+    """Fetch a stored transaction analysis result.
+
+    A VIEWER may only read their own transactions; ANALYST/ADMIN may read any.
+    Cross-user reads by a VIEWER return 404 (not 403) so the endpoint does not
+    leak the existence of other users' transaction ids.
+    """
     txn = db.get(Transaction, txn_id)
-    if txn is None:
+    if txn is None or (not is_staff(user) and txn.user_id != user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Transaction not found")
     summary = TransactionSummary(
         id=txn.id,
@@ -114,8 +119,14 @@ def list_transactions(
     limit: int = Query(default=50, ge=1, le=200),
     tier: Optional[str] = Query(default=None, pattern=r"^(LOW|MEDIUM|HIGH)$"),
 ) -> dict:
-    """List recent transactions, newest first, optionally filtered by tier."""
+    """List recent transactions, newest first, optionally filtered by tier.
+
+    ANALYST/ADMIN see every user's transactions (this is a fraud-ops tool); a
+    VIEWER is scoped to their own transactions only.
+    """
     stmt = select(Transaction).order_by(Transaction.created_at.desc()).limit(limit)
+    if not is_staff(user):
+        stmt = stmt.where(Transaction.user_id == user.id)
     if tier:
         stmt = stmt.where(Transaction.risk_tier == RiskTier(tier))
     rows = db.execute(stmt).scalars().all()
@@ -146,7 +157,14 @@ def user_risk_profile(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    """Return a user's risk profile, served from Redis cache when warm."""
+    """Return a user's risk profile, served from Redis cache when warm.
+
+    A VIEWER may only read their own profile; ANALYST/ADMIN may read any user's.
+    """
+    if not is_staff(user) and user_id != user.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "You may only view your own risk profile"
+        )
     cached = redis_client.cache_get_json(f"risk:user:{user_id}")
     if cached is not None:
         cached["cached"] = True

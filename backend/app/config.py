@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # Blockchain
     blockchain_path: str = "./data/chain.json"
     blockchain_difficulty: int = 2
+    # Where the audit chain is persisted: "file" (local JSON, dev/tests) or "db"
+    # (a chain_blocks table in the persistent database — used in production so the
+    # immutable audit trail survives redeploys on ephemeral hosting).
+    blockchain_storage: str = "file"
 
     # Rate limiting
     rate_limit_requests: int = 60

@@ -18,7 +18,7 @@ import { api } from "@/lib/api";
 import type { Alert, DashboardStats, TransactionSummary } from "@/lib/types";
 import { formatDateTime, formatINR, formatNumber, tierColor } from "@/lib/format";
 import { useAlertStream } from "@/hooks/useWebSocket";
-import { EmptyState, Panel, Skeleton, StatCard, TierBadge } from "@/components/ui";
+import { CountUp, EmptyState, Panel, Skeleton, StatCard, TierBadge } from "@/components/ui";
 
 const CHART_AXIS = { fontSize: 11, fill: "var(--text-dim)" };
 
@@ -77,16 +77,19 @@ export default function DashboardPage() {
           Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28" />)
         ) : (
           <>
-            <StatCard label="Transactions analyzed" value={formatNumber(stats.total_transactions)} />
+            <StatCard
+              label="Transactions analyzed"
+              value={<CountUp value={stats.total_transactions} format={(n) => formatNumber(Math.round(n))} />}
+            />
             <StatCard
               label="Fraud detected"
-              value={formatNumber(stats.fraud_detected)}
+              value={<CountUp value={stats.fraud_detected} format={(n) => formatNumber(Math.round(n))} />}
               accent="var(--danger)"
               sub={`${(stats.fraud_rate * 100).toFixed(1)}% of volume`}
             />
             <StatCard
               label="Avg risk score"
-              value={stats.average_risk_score.toFixed(1)}
+              value={<CountUp value={stats.average_risk_score} format={(n) => n.toFixed(1)} />}
               accent="var(--warning)"
             />
             <StatCard

@@ -11,7 +11,7 @@ from typing import Any
 from app.database import RiskTier, TxnStatus
 from app.utils.helpers import clamp
 
-# Signal weights (sum = 100). See ARCHITECTURE.md §8.
+# Signal weights (sum = 100). ML is advisory (55% combined); rules make up the rest.
 WEIGHTS = {
     "ml_fraud": 40.0,
     "anomaly": 15.0,

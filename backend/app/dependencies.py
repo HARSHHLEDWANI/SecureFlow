@@ -8,7 +8,11 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.core.redis_client import redis_client
 from app.core.security import decode_token
-from app.database import User, get_db
+from app.database import Role, User, get_db
+
+# Roles with full fraud-ops visibility (all transactions, analytics, chain). A
+# VIEWER, by contrast, may only see their own transactions/risk profile.
+STAFF_ROLES = (Role.ANALYST, Role.ADMIN)
 
 settings = get_settings()
 
@@ -52,6 +56,25 @@ def require_role(*roles: str):
         return user
 
     return _checker
+
+
+def is_staff(user: User) -> bool:
+    """True if the user has full fraud-ops visibility (ANALYST or ADMIN)."""
+    return user.role in STAFF_ROLES
+
+
+def require_staff(user: User = Depends(get_current_user)) -> User:
+    """Dependency: allow only ANALYST/ADMIN (full-visibility fraud-ops roles).
+
+    Used to gate the aggregate analytics and blockchain-explorer endpoints, which
+    expose every user's transaction data and are not appropriate for a VIEWER.
+    """
+    if not is_staff(user):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "This resource requires an analyst or admin role",
+        )
+    return user
 
 
 class RateLimiter:

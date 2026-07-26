@@ -50,20 +50,28 @@ so the system stays correct (just slower) if Redis is down.
 - **ML fraud scoring** — a `RandomForestClassifier` (tuned via 5-fold cross-validated grid
   search) plus an unsupervised `IsolationForest` anomaly detector, trained on 12,000
   synthetic UPI transactions with realistic, independently-generated fraud archetypes
-  (account takeover, scam payments, impossible travel, micro-testing). Test AUC-ROC ≈ 0.96.
+  (account takeover, scam payments, impossible travel, micro-testing). Test AUC-ROC ≈ 0.95.
 - **Composite risk engine** — blends the ML signals with velocity, geo-velocity
   (impossible-travel), device-trust, amount-anomaly, and time-of-day into a 0–100 score
   with tiered actions: **LOW → allow**, **MEDIUM → step-up OTP**, **HIGH → block + alert**.
 - **Custom blockchain** — genuine SHA-256 proof-of-work chain with genesis block, chain
-  validation, tamper detection, and on-disk JSON persistence.
+  validation, and tamper detection. Storage is pluggable: a local JSON file in dev/tests,
+  and a durable `chain_blocks` table in Postgres in production, so the audit trail survives
+  redeploys on ephemeral hosting.
 - **Redis everywhere** — prediction & dashboard caching, fixed-window rate limiting,
   session/step-up state, velocity sorted-sets, device sets, geo cache, and a
   `fraud:alerts` pub/sub bus.
+- **Role-based access control** — VIEWERs see only their own transactions/risk profile;
+  ANALYST/ADMIN get full fraud-ops visibility (analytics, blockchain explorer, all
+  transactions); governance is restricted to the council + main admin.
 - **Risk-based authentication** — logins are themselves scored; unrecognised devices
   trigger step-up OTP verification.
-- **Real-time alerts** — WebSocket stream (`/ws/alerts`) bridged to Redis pub/sub.
-- **Polished UI** — dark navy fintech dashboard, transaction analysis with a risk gauge
-  and feature attributions, a blockchain explorer, and model-performance analytics.
+- **Real-time alerts** — authenticated WebSocket stream (`/ws/alerts`, token required)
+  bridged to Redis pub/sub.
+- **Distinctive dark security UI** — a public landing page with a scroll-driven pipeline
+  story and a lazy-loaded 3D blockchain visual (React Three Fiber), a dark-navy fintech
+  dashboard with a risk gauge and feature attributions, a blockchain explorer, analytics,
+  and full mobile navigation.
 - **UPI Transaction Lab** — a built-in, PhonePe/GPay-style simulator that drives live
   payments through the *real* detection pipeline with a stage-by-stage animation, seven
   one-click attack scenarios, and a Guided Demo mode (see below).
@@ -111,11 +119,9 @@ false positives). The presets reflect that:
 | 🔴 Account Takeover | New device + new city + high amount + 2:30 AM | 🚫 Blocked (critical) |
 | ⚡ Rapid-Fire | 10 escalating txns from a bot device | Escalates ✅ → ⚠️ → 🚫 |
 
-**Screenshots** *(add after deployment)*
-
-| Payment interface | Pipeline mid-process | Attack scenarios | Blocked result |
-|---|---|---|---|
-| `docs/img/lab-pay.png` | `docs/img/lab-pipeline.png` | `docs/img/lab-scenarios.png` | `docs/img/lab-blocked.png` |
+**See it live** — the Lab is a public, unauthenticated route: open `/lab` (or click
+**Try the Live Demo** on the landing page) and run the **Guided Demo**. Screenshots/GIFs
+can be captured from a running instance and dropped into `docs/img/`.
 
 ---
 
@@ -153,13 +159,29 @@ rogue tamper* and watch the watchdog restore it from the chain on its own.
 | Layer       | Technology                                                       |
 |-------------|------------------------------------------------------------------|
 | Frontend    | Next.js 16, React 19, Tailwind CSS v4, Recharts, lucide-react     |
+| UI motion   | Framer Motion, React Three Fiber + drei (3D), Lenis (smooth scroll) |
 | Backend     | Python 3.11, FastAPI, Uvicorn, Pydantic v2                        |
 | ML          | scikit-learn (RandomForest + IsolationForest), NumPy, pandas      |
 | Data        | SQLAlchemy 2.0 + Alembic · PostgreSQL (prod) / SQLite (dev)       |
 | Cache / RT  | Redis 7 (redis-py)                                                |
 | Blockchain  | Custom Python SHA-256 proof-of-work chain                         |
 | Auth        | JWT (PyJWT) + bcrypt                                              |
-| Tests       | pytest, httpx, fakeredis (73 tests)                               |
+| Tests       | pytest, httpx, fakeredis (82 tests)                               |
+
+---
+
+## Documentation
+
+In-depth docs live in [`docs/`](docs/):
+
+- [**API Reference**](docs/API_REFERENCE.md) — every REST + WebSocket route: method, auth
+  level, request/response schema, and what it calls into.
+- [**Functions Catalog**](docs/FUNCTIONS_CATALOG.md) — a file-by-file catalog of the
+  backend and frontend, for a "walk me through your codebase" conversation.
+- [**Tech Stack & Alternatives**](docs/TECH_STACK_AND_ALTERNATIVES.md) — every major
+  technology choice with honest alternatives and when each would be the better call.
+- [**Interview Prep**](docs/INTERVIEW_PREP.md) — 55 Q&A grounded in the codebase
+  (architecture, security, ML, blockchain, governance, resilience, testing, self-critique).
 
 ---
 
@@ -183,6 +205,10 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 API docs: http://localhost:8000/docs
+
+> The `python -m app.ml.training` step trains the full grid-searched model for
+> serving. It is **not** required just to run the tests — `pytest` auto-trains a
+> model (fast path) on a fresh clone if one is missing.
 
 ### 2. Frontend
 
@@ -212,12 +238,20 @@ secureflow/
 │       ├── ml/              # features, training, evaluation, model
 │       ├── models/          # Pydantic schemas
 │       ├── config.py · database.py · dependencies.py · main.py
-│   └── tests/               # 73 pytest tests
-├── frontend/                # Next.js app (Dashboard, Analyze, Blockchain, Analytics, …)
+│   └── tests/               # 82 pytest tests
+├── frontend/                # Next.js app
+│   └── src/app/
+│       ├── page.tsx         # public landing page (hero, 3D chain, pipeline story)
+│       ├── (app)/           # auth-gated app: dashboard, lab, analyze, blockchain, …
+│       └── auth/            # login / register
+├── docs/                    # API_REFERENCE · FUNCTIONS_CATALOG · TECH_STACK · INTERVIEW_PREP
 ├── legacy/                  # archived pre-rebuild stacks (Express, Hardhat, ai-service)
 ├── docker-compose.yml · render.yaml
-├── ARCHITECTURE.md · AUDIT_REPORT.md
 ```
+
+> **`legacy/` is intentionally archived** — it holds the pre-rebuild Express/Hardhat/
+> ai-service prototypes and is fully disconnected from the active app. Nothing in the
+> running system depends on it.
 
 ---
 
@@ -227,6 +261,8 @@ secureflow/
 transactions, previous_hash, nonce, hash}`. Mining brute-forces a nonce until the SHA-256
 hash starts with N zeroes (difficulty). `validate_chain()` recomputes every hash and checks
 the parent links + proof-of-work; `tamper_detection()` returns the first broken block.
+Blocks persist to a local JSON file in dev and to a `chain_blocks` table in Postgres in
+production (`BLOCKCHAIN_STORAGE=db`) so the chain survives redeploys.
 
 **ML model.** Twelve-plus engineered features (amount z-score, velocity 1h/24h,
 geo-distance, impossible-travel, new-device, new-beneficiary, hour/weekend, …) feed a
@@ -257,7 +293,7 @@ Full interactive spec at `/docs` (Swagger) and `/redoc`.
 ## Tests
 
 ```bash
-cd backend && pytest -q          # 73 tests: blockchain, ML, redis, risk engine, API, WebSocket, UPI Lab, Governance
+cd backend && pytest -q          # 82 tests: blockchain, ML, redis, risk engine, API, authz, WebSocket, UPI Lab, Governance
 ```
 
 ---

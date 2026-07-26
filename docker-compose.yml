@@ -35,6 +35,8 @@ services:
       ENVIRONMENT: production
       DATABASE_URL: postgresql+psycopg2://secureflow:secureflow@postgres:5432/secureflow
       REDIS_URL: redis://redis:6379/0
+      # Persist the audit chain in Postgres (durable) rather than container disk.
+      BLOCKCHAIN_STORAGE: db
       JWT_SECRET: ${JWT_SECRET:-dev_access_secret_change_me_please_0123456789}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev_refresh_secret_change_me_please_9876543210}
       CORS_ORIGINS: http://localhost:3000

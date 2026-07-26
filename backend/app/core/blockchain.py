@@ -59,8 +59,9 @@ class Block:
 class Blockchain:
     """An append-only, proof-of-work secured chain of audit records."""
 
-    def __init__(self, path: str, difficulty: int = 2) -> None:
+    def __init__(self, path: str, difficulty: int = 2, storage: str = "file") -> None:
         self.path = path
+        self.storage = storage  # "file" (local JSON) or "db" (chain_blocks table)
         self.difficulty = max(1, difficulty)
         self._lock = threading.Lock()
         self.chain: list[Block] = []
@@ -68,8 +69,20 @@ class Blockchain:
         self._load_or_init()
 
     # ── Persistence ──────────────────────────────────────────────────────────
+    #
+    # Two interchangeable backends. "file" writes the whole chain to JSON on disk
+    # (fast, zero-dependency — used in dev/tests). "db" appends blocks to a
+    # ``chain_blocks`` table in the persistent database (used in production so the
+    # audit trail survives redeploys on ephemeral hosting). In both cases the
+    # in-memory hashing / proof-of-work / tamper-detection logic is identical.
 
     def _load_or_init(self) -> None:
+        loaded = self._load_from_db() if self.storage == "db" else self._load_from_file()
+        if not loaded:
+            self._create_genesis()
+
+    def _load_from_file(self) -> bool:
+        """Load the chain from the JSON file. Returns True if a chain was loaded."""
         if os.path.exists(self.path):
             try:
                 with open(self.path, "r", encoding="utf-8") as fh:
@@ -77,11 +90,40 @@ class Blockchain:
                 self.chain = [Block.from_dict(b) for b in data.get("chain", [])]
                 self.difficulty = data.get("difficulty", self.difficulty)
                 if self.chain:
-                    logger.info("Loaded blockchain with %d block(s)", len(self.chain))
-                    return
+                    logger.info("Loaded blockchain with %d block(s) from file", len(self.chain))
+                    return True
             except (json.JSONDecodeError, OSError, KeyError) as exc:
                 logger.error("Failed to load chain (%s) - recreating genesis", exc)
-        self._create_genesis()
+        return False
+
+    def _load_from_db(self) -> bool:
+        """Load the chain from the ``chain_blocks`` table. Returns True if loaded."""
+        from sqlalchemy import select
+
+        from app.database import ChainBlock, SessionLocal
+
+        db = SessionLocal()
+        try:
+            rows = db.execute(select(ChainBlock).order_by(ChainBlock.index)).scalars().all()
+            self.chain = [
+                Block(
+                    index=r.index,
+                    timestamp=r.timestamp,
+                    transactions=r.transactions,
+                    previous_hash=r.previous_hash,
+                    nonce=r.nonce,
+                    hash=r.hash,
+                )
+                for r in rows
+            ]
+            if self.chain:
+                logger.info("Loaded blockchain with %d block(s) from DB", len(self.chain))
+                return True
+        except Exception as exc:  # noqa: BLE001 - fall back to genesis on any DB error
+            logger.error("Failed to load chain from DB (%s) - recreating genesis", exc)
+        finally:
+            db.close()
+        return False
 
     def _create_genesis(self) -> None:
         genesis = Block(
@@ -96,6 +138,12 @@ class Blockchain:
         logger.info("Created genesis block")
 
     def _persist(self) -> None:
+        if self.storage == "db":
+            self._persist_to_db()
+        else:
+            self._persist_to_file()
+
+    def _persist_to_file(self) -> None:
         os.makedirs(os.path.dirname(os.path.abspath(self.path)) or ".", exist_ok=True)
         tmp = f"{self.path}.tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
@@ -106,6 +154,32 @@ class Blockchain:
                 default=str,
             )
         os.replace(tmp, self.path)
+
+    def _persist_to_db(self) -> None:
+        """Append any not-yet-persisted blocks to the DB (the chain is append-only)."""
+        from sqlalchemy import func, select
+
+        from app.database import ChainBlock, SessionLocal
+
+        db = SessionLocal()
+        try:
+            max_index = db.scalar(select(func.max(ChainBlock.index)))
+            start = -1 if max_index is None else int(max_index)
+            for block in self.chain:
+                if block.index > start:
+                    db.add(
+                        ChainBlock(
+                            index=block.index,
+                            timestamp=block.timestamp,
+                            transactions=block.transactions,
+                            previous_hash=block.previous_hash,
+                            nonce=block.nonce,
+                            hash=block.hash,
+                        )
+                    )
+            db.commit()
+        finally:
+            db.close()
 
     # ── Mining ───────────────────────────────────────────────────────────────
 
@@ -206,6 +280,8 @@ def get_blockchain() -> Blockchain:
 
                 settings = get_settings()
                 _blockchain = Blockchain(
-                    settings.blockchain_path, settings.blockchain_difficulty
+                    settings.blockchain_path,
+                    settings.blockchain_difficulty,
+                    storage=settings.blockchain_storage,
                 )
     return _blockchain

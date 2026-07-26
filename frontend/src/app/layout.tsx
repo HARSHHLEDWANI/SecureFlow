@@ -1,10 +1,18 @@
 import "./globals.css";
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import localFont from "next/font/local";
 import { Toaster } from "sonner";
 import { AuthProvider } from "@/lib/auth";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+// Self-hosted Inter (variable) so the build has zero external network dependency
+// and works in network-restricted CI/build environments (unlike next/font/google,
+// which fetches from Google Fonts at build time).
+const inter = localFont({
+  src: "./fonts/InterVariable.woff2",
+  variable: "--font-inter",
+  display: "swap",
+  weight: "100 900",
+});
 
 export const metadata: Metadata = {
   title: "SecureFlow — UPI Fraud Detection",

@@ -2,9 +2,8 @@
 
 Every operation is wrapped so that a Redis outage never breaks a request: on
 failure the helper logs once and returns a neutral fallback value, letting the
-caller recompute from the database. Implements the key patterns documented in
-ARCHITECTURE.md (cache, rate-limit, velocity, geo, device, session, queue,
-pub/sub).
+caller recompute from the database. Implements the key patterns cache,
+rate-limit, velocity, geo, device, session, queue, and pub/sub.
 """
 from __future__ import annotations
 
