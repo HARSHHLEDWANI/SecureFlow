@@ -79,3 +79,8 @@ export function useAuth(): AuthContextValue {
   if (!ctx) throw new Error("useAuth must be used within AuthProvider");
   return ctx;
 }
+
+/** True for ANALYST/ADMIN — the roles with full fraud-ops visibility. */
+export function isStaff(user: AuthUser | null): boolean {
+  return user?.role === "ADMIN" || user?.role === "ANALYST";
+}

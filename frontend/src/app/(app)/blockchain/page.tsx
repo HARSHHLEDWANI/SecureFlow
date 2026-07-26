@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Boxes, CheckCircle2, ChevronDown, Link2, ShieldCheck, XCircle } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import type { Block } from "@/lib/types";
 import { formatDateTime, shortHash } from "@/lib/format";
-import { EmptyState, Panel, Skeleton, StatCard } from "@/components/ui";
+import { EmptyState, ErrorState, Panel, Skeleton, StatCard } from "@/components/ui";
 
 export default function BlockchainPage() {
   const [chain, setChain] = useState<Block[]>([]);
@@ -13,11 +13,21 @@ export default function BlockchainPage() {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [validation, setValidation] = useState<{ valid: boolean; message: string } | null>(null);
   const [validating, setValidating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    setError(null);
     try {
       const data = await api.chain();
       setChain([...data.chain].reverse());
+    } catch (e) {
+      setError(
+        e instanceof ApiError && e.status === 403
+          ? "The Blockchain Explorer is restricted to analyst and admin roles."
+          : e instanceof ApiError
+            ? e.message
+            : "Couldn’t load the blockchain. Is the backend running?",
+      );
     } finally {
       setLoading(false);
     }
@@ -32,12 +42,30 @@ export default function BlockchainPage() {
     try {
       const res = await api.validateChain();
       setValidation(res);
+    } catch {
+      /* validation is best-effort; ignore transient errors */
     } finally {
       setValidating(false);
     }
   }
 
   const totalTxns = chain.reduce((sum, b) => sum + b.transactions.length, 0);
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <header>
+          <h1 className="text-xl font-bold">Blockchain Explorer</h1>
+          <p className="text-sm text-[var(--text-muted)]">
+            Tamper-evident audit ledger · SHA-256 proof-of-work
+          </p>
+        </header>
+        <Panel title="Access restricted">
+          <ErrorState message={error} onRetry={load} />
+        </Panel>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

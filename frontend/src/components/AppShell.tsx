@@ -17,16 +17,16 @@ import {
   Menu,
   X,
 } from "lucide-react";
-import { useAuth } from "@/lib/auth";
+import { isStaff, useAuth } from "@/lib/auth";
 import { useAlertStream } from "@/hooks/useWebSocket";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/lab", label: "UPI Lab", icon: FlaskConical, badge: "LAB" },
   { href: "/analyze", label: "Transaction Analysis", icon: ScanSearch },
-  { href: "/blockchain", label: "Blockchain Explorer", icon: Boxes },
+  { href: "/blockchain", label: "Blockchain Explorer", icon: Boxes, staffOnly: true },
   { href: "/governance", label: "Admin Governance", icon: Landmark, badge: "4✓", governanceOnly: true },
-  { href: "/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/analytics", label: "Analytics", icon: BarChart3, staffOnly: true },
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
@@ -65,17 +65,21 @@ function useHighAlertPulse(): boolean {
 function NavList({
   pathname,
   governanceAccess,
+  staff,
   onNavigate,
   pulse,
 }: {
   pathname: string;
   governanceAccess: boolean;
+  staff: boolean;
   onNavigate?: () => void;
   pulse: boolean;
 }) {
   return (
     <nav className="mt-6 flex flex-1 flex-col gap-1">
-      {NAV.filter((n) => !n.governanceOnly || governanceAccess).map(
+      {NAV.filter(
+        (n) => (!n.governanceOnly || governanceAccess) && (!n.staffOnly || staff),
+      ).map(
         ({ href, label, icon: Icon, badge }) => {
           const active = isActive(pathname, href);
           const isLab = href === "/lab";
@@ -225,6 +229,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <NavList
           pathname={pathname}
           governanceAccess={!!user.governance_access}
+          staff={isStaff(user)}
           pulse={pulse}
         />
         {UserFooter}
@@ -279,6 +284,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <NavList
                 pathname={pathname}
                 governanceAccess={!!user.governance_access}
+                staff={isStaff(user)}
                 onNavigate={() => setDrawerOpen(false)}
                 pulse={pulse}
               />

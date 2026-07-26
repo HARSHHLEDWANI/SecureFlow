@@ -17,12 +17,15 @@ import { Activity, Radio } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Alert, DashboardStats, TransactionSummary } from "@/lib/types";
 import { formatDateTime, formatINR, formatNumber, tierColor } from "@/lib/format";
+import { isStaff, useAuth } from "@/lib/auth";
 import { useAlertStream } from "@/hooks/useWebSocket";
 import { CountUp, EmptyState, Panel, Skeleton, StatCard, TierBadge } from "@/components/ui";
 
 const CHART_AXIS = { fontSize: 11, fill: "var(--text-dim)" };
 
 export default function DashboardPage() {
+  const { user } = useAuth();
+  const staff = isStaff(user);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recent, setRecent] = useState<TransactionSummary[]>([]);
   const [recentAlerts, setRecentAlerts] = useState<Alert[]>([]);
@@ -31,20 +34,26 @@ export default function DashboardPage() {
 
   const load = useCallback(async () => {
     try {
-      const [s, t, a] = await Promise.all([
-        api.dashboard(),
-        api.transactions({ limit: 8 }),
-        api.recentAlerts(8),
-      ]);
-      setStats(s);
-      setRecent(t);
-      setRecentAlerts(a);
+      if (staff) {
+        // Analyst/admin: full fraud-ops overview across all transactions.
+        const [s, t, a] = await Promise.all([
+          api.dashboard(),
+          api.transactions({ limit: 8 }),
+          api.recentAlerts(8),
+        ]);
+        setStats(s);
+        setRecent(t);
+        setRecentAlerts(a);
+      } else {
+        // Viewer: scoped to their own transactions (aggregate analytics are staff-only).
+        setRecent(await api.transactions({ limit: 12 }));
+      }
     } catch {
       /* surfaced via empty states */
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [staff]);
 
   useEffect(() => {
     load();
@@ -53,6 +62,47 @@ export default function DashboardPage() {
   }, [load]);
 
   const mergedAlerts = [...liveAlerts, ...recentAlerts].slice(0, 10);
+
+  // Viewer role: a focused "my activity" view, without the staff-only aggregates.
+  if (!staff) {
+    return (
+      <div className="space-y-6">
+        <header>
+          <h1 className="text-xl font-bold">Your activity</h1>
+          <p className="text-sm text-[var(--text-muted)]">
+            Signed in as {user?.role}. Aggregate analytics and the blockchain explorer
+            require an analyst or admin role.
+          </p>
+        </header>
+        <Panel title="Your recent transactions">
+          {loading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-12" />
+              ))}
+            </div>
+          ) : recent.length === 0 ? (
+            <EmptyState title="No transactions yet" hint="Use Transaction Analysis to score one." />
+          ) : (
+            <div className="space-y-2">
+              {recent.map((t) => (
+                <div key={t.id} className="panel-2 flex items-center justify-between p-2.5">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-medium">{t.to_vpa}</p>
+                    <p className="text-[10px] text-[var(--text-dim)]">{formatDateTime(t.created_at)}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-[var(--text-muted)]">{formatINR(t.amount_inr)}</span>
+                    <TierBadge tier={t.risk_tier} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
