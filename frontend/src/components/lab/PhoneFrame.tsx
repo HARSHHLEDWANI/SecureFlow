@@ -38,7 +38,6 @@ export default function PhoneFrame({
   busy: boolean;
 }) {
   const [showQr, setShowQr] = useState(false);
-  const receiverHandle = form.receiver_vpa.includes("@") ? form.receiver_vpa.split("@")[1] : "";
   const showSuggest = form.receiver_vpa.endsWith("@");
 
   const deepLink = useMemo(

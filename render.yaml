@@ -14,6 +14,12 @@ services:
         value: production
       - key: PYTHON_VERSION
         value: "3.11.9"
+      # Persist the audit blockchain in the (durable) managed Postgres instead of
+      # local container disk, which is not guaranteed to survive redeploys on the
+      # free tier — otherwise the "immutable audit trail" would silently reset to
+      # genesis. Keeps the free plan (a Render persistent disk needs a paid plan).
+      - key: BLOCKCHAIN_STORAGE
+        value: db
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET

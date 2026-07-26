@@ -107,13 +107,25 @@ async def redis_alert_listener() -> None:
 
 @router.websocket("/ws/alerts")
 async def alerts_ws(websocket: WebSocket) -> None:
-    """Stream live fraud alerts. Optional ``?token=`` for authenticated clients."""
+    """Stream live fraud alerts to authenticated clients only.
+
+    The live alert feed carries real transaction PII (VPAs, amounts, risk scores),
+    so a valid access token is required via the ``?token=`` query parameter — the
+    browser cannot set Authorization headers on a WebSocket handshake. A missing
+    or invalid token is rejected with close code 1008 (policy violation) *before*
+    the connection is accepted; there is no anonymous read-only mode. (An
+    intentionally public, PII-redacted feed was considered and rejected — see
+    docs/TECH_STACK_AND_ALTERNATIVES.md.)
+    """
     token = websocket.query_params.get("token")
-    if token:
-        try:
-            decode_token(token, "access")
-        except Exception:  # noqa: BLE001 - invalid token => anonymous read-only stream
-            pass
+    if not token:
+        await websocket.close(code=1008, reason="Authentication required")
+        return
+    try:
+        decode_token(token, "access")
+    except Exception:  # noqa: BLE001 - any decode failure => reject the connection
+        await websocket.close(code=1008, reason="Invalid or expired token")
+        return
 
     await manager.connect(websocket)
     try:

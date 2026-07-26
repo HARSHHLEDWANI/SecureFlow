@@ -20,6 +20,27 @@ from app.config import get_settings  # noqa: E402
 get_settings.cache_clear()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def ensure_trained_model():
+    """Guarantee a trained fraud model exists before any test runs.
+
+    The model artifact (``settings.model_path``) is gitignored, so on a fresh
+    clone it is absent and ``ModelService`` would silently fall back to the
+    interpretable heuristic — which scores severe attack patterns lower than the
+    trained RandomForest, breaking the scenario-decision tests. We train a real
+    model here (fast path: fixed hyperparameters, no grid search — a few seconds)
+    so a bare ``pytest`` on a fresh clone goes green with no manual step. If a
+    full model already exists (e.g. from ``python -m app.ml.training``) it is
+    left untouched.
+    """
+    settings = get_settings()
+    if not os.path.exists(settings.model_path):
+        from app.ml.training import run_training
+
+        run_training(fast=True)
+    yield
+
+
 @pytest.fixture(autouse=True)
 def fake_redis(monkeypatch):
     """Back the Redis client with an in-memory fakeredis for every test."""
@@ -41,17 +62,30 @@ def client():
         yield c
 
 
-@pytest.fixture
-def auth_client(client):
-    """A TestClient with an authenticated user; returns (client, headers, user)."""
-    email = f"user_{uuid.uuid4().hex[:8]}@test.com"
+def _set_role(email: str, role_name: str) -> None:
+    """Force a registered user's role directly in the DB (test setup helper)."""
+    from app.database import Role, SessionLocal, User
+    from sqlalchemy import select
+
+    db = SessionLocal()
+    try:
+        user = db.execute(select(User).where(User.email == email)).scalar_one()
+        user.role = Role(role_name)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _register_login(client, email, role="ANALYST", device="trusted-device"):
+    """Register a user, set their role, and return (headers, user)."""
     client.post(
         "/api/v1/auth/register",
         json={"email": email, "password": "password123", "vpa": "tester@okhdfc"},
     )
+    _set_role(email, role)
     res = client.post(
         "/api/v1/auth/login",
-        json={"email": email, "password": "password123", "device_id": "trusted-device"},
+        json={"email": email, "password": "password123", "device_id": device},
     )
     data = res.json()["data"]
     if data["step_up_required"]:
@@ -61,4 +95,30 @@ def auth_client(client):
         )
         data = res.json()["data"]
     headers = {"Authorization": f"Bearer {data['access_token']}"}
-    return client, headers, data["user"]
+    return headers, data["user"]
+
+
+@pytest.fixture
+def auth_client(client):
+    """A TestClient with an authenticated ANALYST user.
+
+    Returns ``(client, headers, user)``. ANALYST is used (rather than the default
+    VIEWER) so the fraud-ops read endpoints — analytics, blockchain explorer,
+    full transaction listing — are accessible, matching how a fraud analyst uses
+    the tool. Ownership/deny-path behaviour is covered by ``viewer_client``.
+    """
+    email = f"user_{uuid.uuid4().hex[:8]}@test.com"
+    headers, user = _register_login(client, email, role="ANALYST")
+    return client, headers, user
+
+
+@pytest.fixture
+def viewer_client(client):
+    """A TestClient with an authenticated VIEWER user (least privilege).
+
+    Returns ``(client, headers, user)``. A VIEWER may only see their own
+    transactions/risk profile and is denied analytics + blockchain endpoints.
+    """
+    email = f"viewer_{uuid.uuid4().hex[:8]}@test.com"
+    headers, user = _register_login(client, email, role="VIEWER", device="viewer-device")
+    return client, headers, user

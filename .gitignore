@@ -38,10 +38,12 @@ Thumbs.db
 # TypeScript
 *.tsbuildinfo
 
-# Markdown docs (architecture, audit report, plans, summaries — kept local only)
+# Local-only markdown scratch (planning notes, summaries) are ignored by default,
+# but the published README and the committed docs/ folder are kept in version control.
 *.md
-# …except the main README at the repo root, which we do publish
 !/README.md
+!/docs/
+!/docs/**
 
 # Claude Code workspace
 .claude/

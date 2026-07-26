@@ -222,6 +222,25 @@ class ProposalVote(Base):
     proposal: Mapped["OverrideProposal"] = relationship(back_populates="votes")
 
 
+class ChainBlock(Base):
+    """A persisted blockchain block (durable storage backend for the audit chain).
+
+    Used when ``BLOCKCHAIN_STORAGE=db`` so the immutable audit trail lives in the
+    (persistent) database instead of a local JSON file — which does not reliably
+    survive redeploys on ephemeral hosting. The in-memory block semantics (hashing,
+    proof-of-work, tamper detection) are unchanged; only persistence differs.
+    """
+
+    __tablename__ = "chain_blocks"
+
+    index: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    timestamp: Mapped[float] = mapped_column(Float, nullable=False)
+    transactions: Mapped[list] = mapped_column(JSON, nullable=False)
+    previous_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    nonce: Mapped[int] = mapped_column(Integer, default=0)
+    hash: Mapped[str] = mapped_column(String(80), nullable=False)
+
+
 def init_db() -> None:
     """Create all tables if they do not yet exist (idempotent)."""
     Base.metadata.create_all(bind=engine)

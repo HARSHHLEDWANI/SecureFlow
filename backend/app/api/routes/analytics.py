@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.core.redis_client import redis_client
 from app.database import RiskTier, Transaction, TxnStatus, User, get_db
-from app.dependencies import envelope, get_current_user
+from app.dependencies import envelope, require_staff
 from app.utils.helpers import utcnow
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -29,7 +29,7 @@ def _aware(dt):
 
 
 @router.get("/dashboard")
-def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
+def dashboard(db: Session = Depends(get_db), user: User = Depends(require_staff)) -> dict:
     """Aggregated fraud KPIs for the dashboard (Redis-cached for 60s)."""
     cached = redis_client.cache_get_json(DASHBOARD_CACHE_KEY)
     if cached is not None:
@@ -86,7 +86,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_us
 @router.get("/recent-alerts")
 def recent_alerts(
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_staff),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> dict:
     """Most recent HIGH/MEDIUM-risk transactions, newest first."""
@@ -113,7 +113,7 @@ def recent_alerts(
 
 
 @router.get("/model-metrics")
-def model_metrics(user: User = Depends(get_current_user)) -> dict:
+def model_metrics(user: User = Depends(require_staff)) -> dict:
     """Return the stored evaluation metrics from the last training run."""
     path = settings.model_metrics_path
     if not os.path.exists(path):

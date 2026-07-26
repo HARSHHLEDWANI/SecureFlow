@@ -25,13 +25,13 @@ export default function AuthPage() {
   const [otp, setOtp] = useState("");
 
   useEffect(() => {
-    if (!loading && user) router.replace("/");
+    if (!loading && user) router.replace("/dashboard");
   }, [loading, user, router]);
 
   function finish(result: LoginResult) {
     if (result.access_token) {
       setSession(result.access_token, result.user);
-      router.replace("/");
+      router.replace("/dashboard");
     }
   }
 

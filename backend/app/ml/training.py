@@ -143,7 +143,22 @@ def generate_dataset(n_rows: int = 12_000, fraud_rate: float = 0.13) -> pd.DataF
     return pd.DataFrame(rows)
 
 
-def main() -> None:
+# Fixed hyperparameters used by the fast training path (skips grid search). These
+# are a strong, previously-observed configuration for this synthetic dataset — good
+# enough for tests/dev while avoiding the ~25–30s cross-validated grid search.
+_FAST_PARAMS = {"n_estimators": 200, "max_depth": 16, "min_samples_leaf": 1}
+
+
+def run_training(fast: bool = False) -> dict:
+    """Train and persist the fraud models, returning the evaluation metrics.
+
+    ``fast=True`` skips the cross-validated :class:`GridSearchCV` and trains a
+    single RandomForest with fixed hyperparameters (:data:`_FAST_PARAMS`). This
+    is used by the test fixtures so a bare ``pytest`` on a fresh clone still gets
+    a genuinely trained model in a few seconds instead of ~30s. The full
+    grid-search path (``fast=False``) is used by ``python -m app.ml.training`` at
+    deploy/build time.
+    """
     settings = get_settings()
     print("Generating synthetic UPI dataset...")
     df = generate_dataset()
@@ -157,24 +172,34 @@ def main() -> None:
         X, y, test_size=0.2, random_state=42, stratify=y
     )
 
-    print("Grid-searching RandomForest (5-fold CV)...")
-    grid = GridSearchCV(
-        RandomForestClassifier(random_state=42, class_weight="balanced", n_jobs=-1),
-        param_grid={
-            "n_estimators": [150, 250],
-            "max_depth": [10, 16, None],
-            "min_samples_leaf": [1, 3],
-        },
-        scoring="f1",
-        cv=5,
-        n_jobs=-1,
-    )
-    grid.fit(X_train, y_train)
-    clf = grid.best_estimator_
-    print(f"  best params: {grid.best_params_}")
+    if fast:
+        print(f"Fast path: training RandomForest with fixed params {_FAST_PARAMS}...")
+        clf = RandomForestClassifier(
+            random_state=42, class_weight="balanced", n_jobs=-1, **_FAST_PARAMS
+        )
+        clf.fit(X_train, y_train)
+        best_params = dict(_FAST_PARAMS)
+        cv_scores = np.array([0.0])  # not computed on the fast path
+    else:
+        print("Grid-searching RandomForest (5-fold CV)...")
+        grid = GridSearchCV(
+            RandomForestClassifier(random_state=42, class_weight="balanced", n_jobs=-1),
+            param_grid={
+                "n_estimators": [150, 250],
+                "max_depth": [10, 16, None],
+                "min_samples_leaf": [1, 3],
+            },
+            scoring="f1",
+            cv=5,
+            n_jobs=-1,
+        )
+        grid.fit(X_train, y_train)
+        clf = grid.best_estimator_
+        best_params = grid.best_params_
+        print(f"  best params: {best_params}")
 
-    cv_scores = cross_val_score(clf, X_train, y_train, cv=5, scoring="roc_auc")
-    print(f"  5-fold CV AUC: {cv_scores.mean():.4f} +/- {cv_scores.std():.4f}")
+        cv_scores = cross_val_score(clf, X_train, y_train, cv=5, scoring="roc_auc")
+        print(f"  5-fold CV AUC: {cv_scores.mean():.4f} +/- {cv_scores.std():.4f}")
 
     y_pred = clf.predict(X_test)
     y_proba = clf.predict_proba(X_test)[:, 1]
@@ -201,7 +226,7 @@ def main() -> None:
         "iso_score_min": iso_min,
         "iso_score_max": iso_max,
         "feature_columns": FEATURE_COLUMNS,
-        "best_params": grid.best_params_,
+        "best_params": best_params,
         "version": "2.0.0",
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -215,7 +240,7 @@ def main() -> None:
         "cv_auc_mean": round(float(cv_scores.mean()), 4),
         "cv_auc_std": round(float(cv_scores.std()), 4),
         "feature_importance": importance,
-        "best_params": grid.best_params_,
+        "best_params": best_params,
         "n_train": int(len(X_train)),
         "n_test": int(len(X_test)),
         "trained_at": bundle["trained_at"],
@@ -224,6 +249,11 @@ def main() -> None:
     with open(settings.model_metrics_path, "w", encoding="utf-8") as fh:
         json.dump(metrics_out, fh, indent=2)
     print(f"Saved metrics -> {settings.model_metrics_path}")
+    return metrics_out
+
+
+def main() -> None:
+    run_training(fast=False)
 
 
 if __name__ == "__main__":

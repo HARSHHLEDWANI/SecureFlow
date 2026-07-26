@@ -56,3 +56,34 @@ def test_get_block_bounds():
     bc.mine_block({"transaction_id": "t1"})
     assert bc.get_block(0) is not None
     assert bc.get_block(99) is None
+
+
+def test_db_storage_backend_persists_and_reloads():
+    """The 'db' storage backend persists blocks durably and reloads correctly."""
+    from sqlalchemy import delete
+
+    from app.database import ChainBlock, SessionLocal, init_db
+
+    init_db()  # ensure chain_blocks table exists
+
+    def _clear():
+        db = SessionLocal()
+        db.execute(delete(ChainBlock))
+        db.commit()
+        db.close()
+
+    _clear()
+    try:
+        bc = Blockchain(path="unused-for-db", difficulty=2, storage="db")
+        assert len(bc.chain) == 1  # genesis persisted to the DB
+        bc.mine_block({"transaction_id": "t1", "amount_inr": 100})
+        bc.mine_block({"transaction_id": "t2", "amount_inr": 200})
+        assert bc.validate_chain() is True
+
+        # A fresh instance reads the chain back out of the database.
+        reloaded = Blockchain(path="unused-for-db", difficulty=2, storage="db")
+        assert len(reloaded.chain) == 3
+        assert reloaded.last_block.hash == bc.last_block.hash
+        assert reloaded.validate_chain() is True
+    finally:
+        _clear()
