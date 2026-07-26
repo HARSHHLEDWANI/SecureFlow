@@ -28,15 +28,20 @@ import type { RiskTier } from "@/lib/types";
 const REPO_URL = "https://github.com/HARSHHLEDWANI/SecureFlow";
 
 // ── Small scroll-reveal wrapper ───────────────────────────────────────────────
+// `initial`/`whileInView` are kept deterministic (identical on server + client) so
+// there is no hydration mismatch. Reduced-motion is expressed via the transition
+// (a 0-duration snap), which is client-only and never part of the SSR'd style —
+// the server can't know the user's motion preference, so we must not branch the
+// rendered markup on it.
 function Reveal({ children, delay = 0, className = "" }: { children: ReactNode; delay?: number; className?: string }) {
   const reduce = useReducedMotion();
   return (
     <motion.div
       className={className}
-      initial={reduce ? { opacity: 0 } : { opacity: 0, y: 24 }}
-      whileInView={reduce ? { opacity: 1 } : { opacity: 1, y: 0 }}
+      initial={{ opacity: 0, y: 24 }}
+      whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "-80px" }}
-      transition={{ duration: 0.6, delay, ease: [0.22, 1, 0.36, 1] }}
+      transition={reduce ? { duration: 0 } : { duration: 0.6, delay, ease: [0.22, 1, 0.36, 1] }}
     >
       {children}
     </motion.div>
@@ -98,6 +103,12 @@ const TECH = [
 
 export default function LandingPage() {
   const { user } = useAuth();
+  const reduce = useReducedMotion();
+  // Hero entrance transitions snap instantly for reduced-motion users. (The
+  // `initial`/`animate` markup stays deterministic so SSR and client hydration
+  // agree regardless of the viewer's motion preference.)
+  const heroT = (delay: number) =>
+    reduce ? { duration: 0 } : { duration: 0.6, delay };
 
   return (
     <SmoothScroll>
@@ -138,7 +149,7 @@ export default function LandingPage() {
               <motion.span
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5 }}
+                transition={heroT(0)}
                 className="tier-chip mb-5 text-[var(--accent-cyan)]"
               >
                 <Radio className="h-3.5 w-3.5" /> Real-time UPI fraud defense
@@ -146,7 +157,7 @@ export default function LandingPage() {
               <motion.h1
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.6, delay: 0.05 }}
+                transition={heroT(0.05)}
                 className="text-4xl font-extrabold leading-[1.08] md:text-6xl"
               >
                 <span className="text-glow">Every UPI payment,</span>
@@ -156,7 +167,7 @@ export default function LandingPage() {
               <motion.p
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.6, delay: 0.12 }}
+                transition={heroT(0.12)}
                 className="mt-5 max-w-md text-[var(--text-muted)]"
               >
                 SecureFlow scores every transaction 0–100 for fraud risk with machine learning and
@@ -166,7 +177,7 @@ export default function LandingPage() {
               <motion.div
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.6, delay: 0.2 }}
+                transition={heroT(0.2)}
                 className="mt-8 flex flex-wrap gap-3"
               >
                 <Link href="/lab" className="btn btn-primary text-base">
@@ -185,7 +196,7 @@ export default function LandingPage() {
               <motion.div
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.7, delay: 0.15 }}
+                transition={heroT(0.15)}
                 className="glow-ring rounded-2xl bg-[var(--surface)]/70 p-8 backdrop-blur-sm"
               >
                 <p className="mb-4 text-center text-[10px] uppercase tracking-[0.25em] text-[var(--text-dim)]">
