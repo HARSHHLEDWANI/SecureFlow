@@ -25,7 +25,7 @@ def _analyze(client, headers, amount=4200):
 
 
 def test_explain_falls_back_to_template_without_key(auth_client):
-    """With ANTHROPIC_API_KEY unset (the test default), returns a template result."""
+    """With GROQ_API_KEY unset (the test default), returns a template result."""
     client, headers, _ = auth_client
     txn = _analyze(client, headers)
     res = client.post(f"/api/v1/transaction/{txn['id']}/explain", headers=headers)
@@ -38,7 +38,7 @@ def test_explain_falls_back_to_template_without_key(auth_client):
 
 def test_explain_llm_failure_falls_back_to_template(auth_client, monkeypatch):
     """Even with a key configured, an LLM error degrades to the template."""
-    monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-test-key")
+    monkeypatch.setattr(get_settings(), "groq_api_key", "gsk-test-key")
 
     def _boom(_facts):
         raise RuntimeError("api unavailable")
@@ -54,7 +54,7 @@ def test_explain_llm_failure_falls_back_to_template(auth_client, monkeypatch):
 
 def test_explain_uses_llm_when_available(auth_client, monkeypatch):
     """When a key is set and the call succeeds, source is 'llm' and text is passed through."""
-    monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-test-key")
+    monkeypatch.setattr(get_settings(), "groq_api_key", "gsk-test-key")
     monkeypatch.setattr(explain_mod, "_llm_explanation", lambda _facts: "Blocked: impossible travel.")
 
     client, headers, _ = auth_client

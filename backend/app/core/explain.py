@@ -7,7 +7,7 @@ score/tier/status are computed entirely by `app/core/risk_engine.py` before this
 module is ever called.
 
 Design guarantees:
-  * If ``ANTHROPIC_API_KEY`` is unset, the API errors, or the call exceeds a short
+  * If ``GROQ_API_KEY`` is unset, the API errors, or the call exceeds a short
     timeout, we fall back to a deterministic template built from the strongest
     risk signals. Every result carries ``source`` ("llm" | "template") so the UI
     can be honest about which path produced it.
@@ -106,21 +106,23 @@ def template_explanation(
 
 def _llm_explanation(facts: str) -> str:
     """Call the LLM for a short explanation. Raises on any failure (caller falls back)."""
-    import anthropic  # imported lazily so a missing package simply triggers the fallback
+    import groq  # imported lazily so a missing package simply triggers the fallback
 
     settings = get_settings()
-    client = anthropic.Anthropic(
-        api_key=settings.anthropic_api_key,
+    client = groq.Groq(
+        api_key=settings.groq_api_key,
         timeout=settings.explain_timeout_seconds,
         max_retries=0,  # this path costs money — don't silently retry
     )
-    resp = client.messages.create(
+    resp = client.chat.completions.create(
         model=settings.explain_model,
         max_tokens=settings.explain_max_tokens,
-        system=_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": facts}],
+        messages=[
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": facts},
+        ],
     )
-    text = " ".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
+    text = (resp.choices[0].message.content or "").strip()
     if not text:
         raise ValueError("Empty LLM response")
     return text
@@ -135,7 +137,7 @@ def explain_decision(
     error, timeout) falls back to the deterministic template. Never raises.
     """
     settings = get_settings()
-    if not settings.anthropic_api_key:
+    if not settings.groq_api_key:
         return {
             "explanation": template_explanation(txn, components, feature_contributions),
             "source": "template",

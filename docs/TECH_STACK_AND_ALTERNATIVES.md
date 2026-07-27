@@ -343,13 +343,13 @@ means no infra to run. Perfect for a solo portfolio.
 
 ---
 
-## Anthropic Claude (LLM for "Explain This Decision") — the one external cost
+## Groq (LLM for "Explain This Decision") — the one external cost
 
 **Here**: the explain endpoint turns the already-computed risk signals into 2–3
-plain-English sentences via the Anthropic API, using **Claude Haiku 4.5** (a
-small/fast/inexpensive model) for a short structured completion. The LLM only
-*explains* a decision the risk engine already made — it never influences the
-score, tier, or action.
+plain-English sentences via the Groq API, using **Llama 3.1 8B Instant** (a
+small/fast/inexpensive model served on Groq's LPU inference) for a short
+structured completion. The LLM only *explains* a decision the risk engine
+already made — it never influences the score, tier, or action.
 
 **Why reasonable — and the honest cost note**: this is the **one feature in the
 project with an external, per-call cost dependency**. Everything else runs on
@@ -360,13 +360,15 @@ than any other endpoint (10/window vs 60), uses the **cheapest model** with a lo
 `max_tokens` (~220), and has a **hard 5s timeout with no retries**. And it
 **degrades to a deterministic template** when the key is absent or the call
 fails — so the app is fully functional with zero configuration and zero cost.
+Groq's free tier and very low per-token latency make it a good fit for an
+on-demand, latency-sensitive call like this one.
 
 **Alternatives**:
-- **A hosted LLM from another provider (OpenAI, Google Gemini, etc.)** — comparable
-  capability for a task this small. Any of them would work; the tradeoff is
-  provider lock-in and API shape, not capability. Claude was chosen because the
-  fallback-first design makes the provider easily swappable and the small model is
-  cheap.
+- **A hosted LLM from another provider (Anthropic, OpenAI, Google Gemini, etc.)** —
+  comparable capability for a task this small. Any of them would work; the
+  tradeoff is provider lock-in, API shape, and cost, not capability. Groq was
+  chosen for its generous free tier and fast inference on small open models, and
+  the fallback-first design makes the provider easily swappable.
 - **A local/open-source model (Llama, Mistral via Ollama)** — no per-call cost and
   full data control. The better call if the explanations must never leave your
   infra or you want zero marginal cost — but it needs a GPU/host to run, which

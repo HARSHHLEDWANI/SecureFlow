@@ -114,7 +114,7 @@ The LLM **explains an already-made decision**; it never influences the score/tie
   decision-already-made context passed to the model.
 - **`template_explanation(...)`** — deterministic fallback built from the strongest
   risk components (used when the LLM is unavailable/errors/times out).
-- **`_llm_explanation(facts)`** — call the Anthropic API (small/fast/cheap model, hard
+- **`_llm_explanation(facts)`** — call the Groq API (small/fast/cheap model, hard
   timeout, `max_retries=0`); raises on any failure so the caller falls back.
 - **`explain_decision(txn, components, feature_contributions)`** — returns
   `{explanation, source}`; tries the LLM when a key is configured, else the template.

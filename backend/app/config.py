@@ -61,10 +61,10 @@ class Settings(BaseSettings):
     integrity_watchdog_interval_seconds: int = 15
 
     # "Explain This Decision" (Feature A) — the one feature with an external cost.
-    # If ``anthropic_api_key`` is empty the endpoint transparently falls back to a
+    # If ``groq_api_key`` is empty the endpoint transparently falls back to a
     # deterministic template, so the app works with zero configuration.
-    anthropic_api_key: str = ""
-    explain_model: str = "claude-haiku-4-5"  # small/fast/cheap; short structured completion
+    groq_api_key: str = ""
+    explain_model: str = "llama-3.1-8b-instant"  # small/fast/cheap; short structured completion
     explain_timeout_seconds: float = 5.0
     explain_max_tokens: int = 220
     explain_cache_ttl_seconds: int = 86400   # cache per-txn so repeat clicks don't re-spend

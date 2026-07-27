@@ -134,7 +134,7 @@ All auth routes are rate-limited per-IP (`RateLimiter`, fail-open via Redis).
   `explanation` (str), `source` (`"llm"` | `"template"`), `cached` (bool).
 - **Calls into**: reconstructs the decision context from the stored `ANALYZE_*`
   `AuditLog` metadata (`components` + `feature_contributions`), then
-  `app/core/explain.py::explain_decision`. That calls the Anthropic API
+  `app/core/explain.py::explain_decision`. That calls the Groq API
   (`explain_model`, a small/fast/cheap model) with a hard timeout; **the LLM only
   explains — it never influences the score/tier/action**. On no key / error /
   timeout it falls back to a deterministic template (`source: "template"`).
