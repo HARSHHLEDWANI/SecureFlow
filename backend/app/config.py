@@ -60,6 +60,24 @@ class Settings(BaseSettings):
     integrity_watchdog_enabled: bool = True
     integrity_watchdog_interval_seconds: int = 15
 
+    # "Explain This Decision" (Feature A) — the one feature with an external cost.
+    # If ``anthropic_api_key`` is empty the endpoint transparently falls back to a
+    # deterministic template, so the app works with zero configuration.
+    anthropic_api_key: str = ""
+    explain_model: str = "claude-haiku-4-5"  # small/fast/cheap; short structured completion
+    explain_timeout_seconds: float = 5.0
+    explain_max_tokens: int = 220
+    explain_cache_ttl_seconds: int = 86400   # cache per-txn so repeat clicks don't re-spend
+    explain_rate_limit_requests: int = 10    # tighter than the general limiter (costs money)
+
+    # Governance → model feedback loop (Feature B).
+    feedback_model_dir: str = "./data/models"          # versioned candidate models live here
+    feedback_min_examples: int = 1                      # min corrections to allow a retrain
+    feedback_correction_weight: float = 5.0            # weight of real corrections vs synthetic
+    feedback_regression_auc_drop: float = 0.03        # block promotion if AUC drops beyond this
+    feedback_regression_recall_drop: float = 0.05     # ...or recall drops beyond this
+    feedback_retrain_fast: bool = False               # skip grid search on retrain (tests set True)
+
     @property
     def cors_origins_list(self) -> list[str]:
         """CORS origins parsed from the comma-separated configuration string."""

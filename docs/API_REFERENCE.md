@@ -120,6 +120,28 @@ All auth routes are rate-limited per-IP (`RateLimiter`, fail-open via Redis).
 - **Query**: `limit` (1–200, default 50), `tier` (`LOW|MEDIUM|HIGH`, optional).
 - **Response** `data`: `TransactionSummary[]`.
 
+### `POST /api/v1/transaction/{txn_id}/explain`
+- **Purpose**: Return a plain-English, 2–3 sentence explanation of an
+  already-made fraud decision (Feature A).
+- **Auth**: owner/staff — **same** ownership rule as `/{txn_id}/status` (reuses the
+  `_txn_or_404` helper): a VIEWER may only explain their own transaction, staff any;
+  cross-user → 404.
+- **Rate-limited**: yes, and **more tightly** than other endpoints
+  (`RateLimiter("explain", limit=explain_rate_limit_requests)`, default 10/window)
+  because it has a real per-call cost.
+- **Request body**: none.
+- **Response** `data`: `ExplanationResult` (`app/models/transaction.py`) —
+  `explanation` (str), `source` (`"llm"` | `"template"`), `cached` (bool).
+- **Calls into**: reconstructs the decision context from the stored `ANALYZE_*`
+  `AuditLog` metadata (`components` + `feature_contributions`), then
+  `app/core/explain.py::explain_decision`. That calls the Anthropic API
+  (`explain_model`, a small/fast/cheap model) with a hard timeout; **the LLM only
+  explains — it never influences the score/tier/action**. On no key / error /
+  timeout it falls back to a deterministic template (`source: "template"`).
+- **Caching**: Redis `explain:{txn_id}` (TTL 24h) so repeat clicks don't re-spend
+  budget; degrades gracefully if Redis is down. **This is the only endpoint with
+  an external cost dependency** — see docs/TECH_STACK_AND_ALTERNATIVES.md.
+
 ### `GET /api/v1/risk-score/{user_id}`
 - **Purpose**: Return a user's aggregate risk profile.
 - **Auth**: owner/staff — a VIEWER may only read their own profile (**403**
@@ -267,6 +289,33 @@ admin). See `app/core/governance.py`.
 
 ### `POST /api/v1/governance/watchdog/scan`
 - Run one integrity scan immediately (auto-heals any tampering found).
+
+### `GET /api/v1/governance/feedback/summary`
+- **Purpose**: State of the governance→model feedback loop (Feature B).
+- **Response** `data`: `{ unconsumed_corrections, min_examples, live_metrics,
+  candidates: [{ version, metrics, n_corrections, regression }], retrain_status }`.
+- **Calls into**: `app/ml/feedback.py` (`unconsumed_count`, `live_metrics`,
+  `list_candidates`).
+
+### `POST /api/v1/governance/feedback/retrain`
+- **Purpose**: Retrain a **versioned candidate** model on the synthetic dataset +
+  the approved, unconsumed corrections (weighted higher). Runs as a FastAPI
+  `BackgroundTasks` job (a full grid-search retrain is ~25–30s) — poll
+  `feedback/summary`'s `retrain_status`. **Never promotes.**
+- **Behavior**: 400 if there are fewer than `feedback_min_examples` corrections;
+  409 if a retrain is already running. Uses only transactions that have a
+  persisted `feature_snapshot` (scored after Feature B shipped) — see the note in
+  the Transactions/Feedback design.
+- **Calls into**: `feedback.run_retrain_job` → `run_feedback_retrain`.
+
+### `POST /api/v1/governance/feedback/promote`
+- **Purpose**: Make a candidate version the live model.
+- **Body**: `PromoteRequest` — `version` (int ≥1), `force` (bool).
+- **Behavior**: The **regression guard** blocks promotion if the candidate's
+  AUC/recall drop beyond the configured thresholds vs the live model, unless
+  `force=true`. On success, swaps in the model, reloads the model singleton
+  (`reload_model_service`), and marks the folded-in corrections
+  `consumed_for_training=True` (only on success). 400 on a blocked/unknown candidate.
 
 ---
 

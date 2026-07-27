@@ -78,18 +78,25 @@ def require_staff(user: User = Depends(get_current_user)) -> User:
 
 
 class RateLimiter:
-    """Per-IP, per-endpoint fixed-window rate limiter (fail-open via Redis)."""
+    """Per-IP, per-endpoint fixed-window rate limiter (fail-open via Redis).
 
-    def __init__(self, endpoint: str) -> None:
+    ``limit`` overrides the global ``rate_limit_requests`` for this endpoint —
+    used to throttle the (cost-bearing) explain endpoint more tightly than the
+    free endpoints.
+    """
+
+    def __init__(self, endpoint: str, limit: Optional[int] = None) -> None:
         self.endpoint = endpoint
+        self.limit = limit
 
     def __call__(self, request: Request) -> None:
         client_ip = request.client.host if request.client else "unknown"
         key = f"ratelimit:{client_ip}:{self.endpoint}"
+        max_requests = self.limit if self.limit is not None else settings.rate_limit_requests
         count = redis_client.rate_limit_hit(key, settings.rate_limit_window_seconds)
-        if count > settings.rate_limit_requests:
+        if count > max_requests:
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,
-                f"Rate limit exceeded ({settings.rate_limit_requests}/"
+                f"Rate limit exceeded ({max_requests}/"
                 f"{settings.rate_limit_window_seconds}s)",
             )

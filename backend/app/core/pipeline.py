@@ -328,6 +328,8 @@ def run_pipeline(
         ml_fraud_prob=ml_result["fraud_prob"],
         anomaly_score=ml_result["anomaly_score"],
         status=risk["status"],
+        # Snapshot the exact feature vector the model scored, for the feedback loop.
+        feature_snapshot=ml_result["features"],
     )
     db.add(txn)
     db.flush()  # assign txn.id
@@ -358,6 +360,9 @@ def run_pipeline(
             block_hash=block.hash,
             audit_metadata={
                 "components": risk["components"],
+                # Top model drivers, persisted so "Explain This Decision" can
+                # reconstruct the decision context server-side from the audit log.
+                "feature_contributions": ml_result["feature_contributions"],
                 "txn_type": txn.txn_type.value,
                 **({"note": note} if note else {}),
             },

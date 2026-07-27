@@ -8,6 +8,7 @@ import type { AnalyzeResult } from "@/lib/types";
 import { formatINR, shortHash, tierColor } from "@/lib/format";
 import { EmptyState, Panel, TierBadge } from "@/components/ui";
 import RiskGauge from "@/components/RiskGauge";
+import ExplainDecision from "@/components/ExplainDecision";
 
 interface FormState {
   to_vpa: string;
@@ -205,6 +206,8 @@ export default function AnalyzePage() {
               >
                 {result.recommended_action}
               </div>
+
+              <ExplainDecision txnId={result.id} />
 
               <div>
                 <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-[var(--text-muted)]">

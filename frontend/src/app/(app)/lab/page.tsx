@@ -13,10 +13,12 @@ import {
   Zap,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { isStaff, useAuth } from "@/lib/auth";
 import type { UpiDemoUser, UpiPayResult, UpiScenario } from "@/lib/types";
 import { formatINR, shortHash, formatDateTime } from "@/lib/format";
 import { DECISION_META } from "@/lib/labFormat";
 import { Panel, EmptyState } from "@/components/ui";
+import ExplainDecision from "@/components/ExplainDecision";
 import PhoneFrame, { type PayForm } from "@/components/lab/PhoneFrame";
 import PipelineVisualizer from "@/components/lab/PipelineVisualizer";
 import ScenarioPanel from "@/components/lab/ScenarioPanel";
@@ -34,6 +36,10 @@ const GUIDED_STEPS: { scenario: string; blurb: string }[] = [
 ];
 
 export default function LabPage() {
+  const { user } = useAuth();
+  // Explanations require auth + ownership; only staff (analyst/admin) can explain
+  // any transaction, including the Lab's demo-user transactions.
+  const canExplain = isStaff(user);
   const [users, setUsers] = useState<UpiDemoUser[]>([]);
   const [scenarios, setScenarios] = useState<UpiScenario[]>([]);
   const [senderVpa, setSenderVpa] = useState<string>("");
@@ -352,7 +358,7 @@ export default function LabPage() {
                       {open && (
                         <tr className="border-b border-[var(--border)]">
                           <td colSpan={7} className="bg-[var(--bg-elevated)] px-4 py-3">
-                            <Detail r={r} />
+                            <Detail r={r} canExplain={canExplain} />
                           </td>
                         </tr>
                       )}
@@ -418,8 +424,9 @@ function RapidFeed({ feed }: { feed: UpiPayResult[] }) {
   );
 }
 
-function Detail({ r }: { r: UpiPayResult }) {
+function Detail({ r, canExplain }: { r: UpiPayResult; canExplain: boolean }) {
   return (
+    <div className="space-y-3">
     <div className="grid gap-4 md:grid-cols-3">
       <div>
         <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-[var(--text-muted)]"><Terminal className="h-3 w-3" /> ML & risk</p>
@@ -450,6 +457,8 @@ function Detail({ r }: { r: UpiPayResult }) {
           <li>Action: {r.recommended_action}</li>
         </ul>
       </div>
+    </div>
+    {canExplain && <ExplainDecision txnId={r.txn_id} />}
     </div>
   );
 }

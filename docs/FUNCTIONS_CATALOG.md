@@ -108,6 +108,18 @@ The single source of truth for the transaction-analysis flow.
 - **`create_token(subject, type, **claims)`** — signed JWT with configured expiry.
 - **`decode_token(token, type)`** — decode/validate a JWT (raises `PyJWTError`).
 
+## `core/explain.py` (Feature A — "Explain This Decision")
+The LLM **explains an already-made decision**; it never influences the score/tier/action.
+- **`build_facts(txn, components, feature_contributions)`** — assemble the structured,
+  decision-already-made context passed to the model.
+- **`template_explanation(...)`** — deterministic fallback built from the strongest
+  risk components (used when the LLM is unavailable/errors/times out).
+- **`_llm_explanation(facts)`** — call the Anthropic API (small/fast/cheap model, hard
+  timeout, `max_retries=0`); raises on any failure so the caller falls back.
+- **`explain_decision(txn, components, feature_contributions)`** — returns
+  `{explanation, source}`; tries the LLM when a key is configured, else the template.
+  Never raises.
+
 ## `core/governance.py`
 Multi-admin consensus + the self-healing watchdog.
 - **`seed_council()` / `council_members` / `council_size` / `is_council`** — the
@@ -183,13 +195,34 @@ Multi-admin consensus + the self-healing watchdog.
   confusion matrix.
 - **`feature_importance(clf, columns)`** — ranked feature importances.
 
+## `ml/feedback.py` (Feature B — governance → model feedback loop)
+- **`collect_feedback_examples(db)` / `unconsumed_count(db)`** — approved, not-yet-
+  consumed council corrections joined to each transaction's persisted
+  `feature_snapshot` (never a recomputed vector); labeled fraud/legit.
+- **`run_feedback_retrain(db, fast=False)`** — retrain on synthetic data + weighted
+  corrections (`sample_weight`); writes a **versioned candidate** (`fraud_model_v{n}`
+  + metrics) — never overwrites the live model. Returns candidate metrics + the guard.
+- **`evaluate_regression_guard(candidate)`** / **`live_metrics()`** — compare a
+  candidate's AUC/recall to the live model; block on a material drop.
+- **`promote_candidate(db, version, force=False)`** — the only path that makes a
+  candidate live: honors the guard (unless `force`), swaps the model file, calls
+  `reload_model_service`, and marks corrections `consumed_for_training` on success.
+- **`list_candidates()`** — metadata for all on-disk candidates.
+- **`run_retrain_job()` + `retrain_status`** — background entry point + pollable status.
+
+## `ml/model.py` (addition)
+- **`reload_model_service()`** — force the model singleton to reload from disk (used
+  after a promotion swaps in a new model).
+
 ## `models/` (Pydantic schemas)
 - **`user.py`** — `RegisterRequest`, `LoginRequest`, `StepUpRequest`, `UserPublic`,
   `LoginResponse`.
 - **`transaction.py`** — `TransactionAnalyzeRequest`, `RiskComponents`,
-  `FeatureContribution`, `TransactionResult`, `TransactionSummary`, `UserRiskProfile`.
+  `FeatureContribution`, `TransactionResult`, `TransactionSummary`, `UserRiskProfile`,
+  `ExplanationResult` (Feature A).
 - **`upi.py`** — `UPIPayRequest`, `UPIPayResult` (VPA-pattern validated).
-- **`governance.py`** — `ProposalCreate`, `VoteRequest`, `TamperRequest`.
+- **`governance.py`** — `ProposalCreate`, `VoteRequest`, `TamperRequest`,
+  `PromoteRequest` (Feature B).
 - **`analytics.py` / `blockchain.py`** — response schemas for the analytics and
   blockchain routes.
 
@@ -237,6 +270,12 @@ See **API_REFERENCE.md** for every endpoint. Route modules:
 - **`ui.tsx`** — `Panel`, `StatCard`, `TierBadge`, `Skeleton`, `EmptyState`,
   `ErrorState`, and **`CountUp`** (reduced-motion-aware animated counter).
 - **`RiskGauge.tsx`** — semicircular 0–100 risk gauge (animated `stroke-dasharray`).
+- **`ExplainDecision.tsx`** — the on-demand "Explain this decision" control
+  (Feature A); calls `api.explain`, shows the text with an honest "AI-generated" vs
+  "Auto-generated" label from `source`.
+- **`governance/ModelFeedbackPanel.tsx`** — the "Model feedback loop" panel
+  (Feature B): pending-correction count, Retrain (polls while running), candidate
+  metrics vs live, and Promote (disabled/needs-override when the regression guard trips).
 - **`lab/PhoneFrame.tsx`** — the phone-style UPI payment composer (sender select,
   amount, receiver autocomplete, QR deep-link, pay button).
 - **`lab/PipelineVisualizer.tsx`** — animated per-stage pipeline reveal from a

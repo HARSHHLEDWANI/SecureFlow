@@ -133,6 +133,9 @@ export const api = {
     return request<TransactionSummary[]>(`/transaction${q}`);
   },
 
+  explain: (txnId: string) =>
+    request<import("./types").Explanation>(`/transaction/${txnId}/explain`, { method: "POST" }),
+
   riskProfile: (userId: string) =>
     request<{ transaction_count: number; average_risk_score: number; flagged_count: number }>(
       `/risk-score/${userId}`,
@@ -212,6 +215,19 @@ export const api = {
       request<{ checked: number; healed: { transaction_id: string; from_status: string; to_status: string; block_index: number; at: string }[] }>(
         "/governance/watchdog/scan",
         { method: "POST" },
+      ),
+
+    // ── Model feedback loop (Feature B) ────────────────────────────────────────
+    feedbackSummary: () => request<import("./types").FeedbackSummary>("/governance/feedback/summary"),
+    feedbackRetrain: () =>
+      request<{ scheduled: boolean; pending_corrections: number }>(
+        "/governance/feedback/retrain",
+        { method: "POST" },
+      ),
+    feedbackPromote: (version: number, force = false) =>
+      request<{ promoted_version: number; consumed: number; forced: boolean }>(
+        "/governance/feedback/promote",
+        { method: "POST", body: JSON.stringify({ version, force }) },
       ),
   },
 };

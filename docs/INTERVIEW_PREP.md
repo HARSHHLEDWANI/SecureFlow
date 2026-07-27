@@ -540,3 +540,101 @@ is unavailable the code uses the DB count, and if Redis is available it's used d
 Redis velocity is authoritative when present because it's the live sliding window; the
 DB count is a correctness backstop, not a second opinion. They're not reconciled at
 read time — it's fallback, not consensus.
+
+---
+
+## "Explain This Decision" (LLM feature)
+
+**Q: You added an LLM to a fraud system. Doesn't that make the model non-deterministic?**
+A: No — and this is the key design point. The LLM never touches the decision. The risk
+engine computes the score, tier, and action deterministically from ML + rules, *then*
+the finished decision plus the structured signals are handed to the LLM, which only
+writes a 2–3 sentence explanation of a decision that's already made. It's output-only.
+The fraud decision is identical whether or not the LLM ever runs — you can turn the API
+key off and the system behaves exactly the same, just with a template explanation
+instead of a generated one.
+
+**Q: This is the one feature that costs money per call. How do you keep that bounded?**
+A: Five guardrails. It's on-demand only — a button, not something that runs on every
+transaction. It's cached in Redis per transaction, so repeat clicks are free. It's
+rate-limited more tightly than any other endpoint — 10 per window versus 60 — because
+it's the one endpoint that costs real money. It uses the cheapest fast model (Claude
+Haiku) with a low max-tokens cap and a hard 5-second timeout with no retries. And if the
+key is missing or the call fails, it falls back to a deterministic template. So the cost
+is bounded, close to zero, and the feature never blocks or degrades the core pipeline.
+
+**Q: Why the template fallback instead of just erroring?**
+A: Two reasons. First, availability — the explanation is a nice-to-have, so a network
+blip or missing key should never break the UI or the request. Second, honesty — the
+whole project's ethos is being upfront about what's real versus fallback, so every
+response carries a `source` field ("llm" or "template") and the UI labels it
+"AI-generated" vs "Auto-generated" rather than pretending they're the same. The template
+itself is genuinely useful: it names the strongest risk components, so it degrades to
+"good enough," not to gibberish.
+
+**Q: How does the explain endpoint get the decision context if the LLM is server-side?**
+A: It reconstructs it from what's already stored. When a transaction is analyzed, the
+audit log records the risk `components` and top `feature_contributions` in its metadata.
+The explain endpoint reads the latest `ANALYZE_*` audit log for that transaction and
+passes those to the explainer. So there's no extra state and it's cacheable purely by
+transaction id. Access reuses the exact same ownership check as the status endpoint — a
+viewer can only explain their own transaction, and I extracted that into one shared
+helper rather than writing a second check that could drift.
+
+---
+
+## Governance → model feedback loop
+
+**Q: Walk me through the feedback loop and why it exists.**
+A: When the council unanimously approves overturning a fraud decision, that's a
+human-verified label — the strongest signal you can get. Before, that signal was thrown
+away after updating the transaction and the chain. Now it's captured as training data:
+an admin can retrain a candidate model on the synthetic dataset plus those corrections,
+weighted higher, and promote it if it's not a regression. It closes the loop between the
+governance system and the ML model — real fraud analysts' corrections actually improve
+the model.
+
+**Q: Why not just update the model automatically when a correction is approved?**
+A: Because a handful of corrections — possibly mislabeled, possibly adversarial if an
+admin is compromised — could silently corrupt production with no gate. Online learning
+makes the live model a moving target with no reviewable artifact. Instead every retrain
+produces a separately versioned candidate file, a regression guard blocks promoting a
+candidate whose AUC or recall drops materially versus the live model, and promotion is an
+explicit human action. Adaptation is slower, but for fraud scoring, safety and
+auditability beat speed. And the unanimous-council requirement is the upstream safety
+property — a single admin can't manufacture training data either.
+
+**Q: Why do you snapshot the feature vector instead of recomputing it at retrain time?**
+A: This is the subtle correctness point. Several features — velocity, geo-history,
+new-device — are time- and state-dependent. If I recomputed them later from current
+Redis/DB state, they wouldn't match what the model actually saw when it scored that
+transaction. Training on that drifted vector would quietly corrupt the model rather than
+improve it. So I persist the exact feature vector at scoring time in a `feature_snapshot`
+column, and the loop only uses transactions that have one. I'm explicit that this means
+the loop only works for transactions scored after the feature shipped — I don't try to
+backfill historical ones by recomputing, precisely because it would be wrong.
+
+**Q: How do you make sure a correction is only used once, and only counts if promotion succeeds?**
+A: The proposal has a `consumed_for_training` flag. Corrections are marked consumed only
+inside a successful `promote_candidate`, not on every retrain attempt. So if I retrain,
+don't like the candidate, and abandon it — or the regression guard blocks it — those
+corrections stay available for the next attempt. It makes retraining idempotent and
+incremental: a given human correction is folded into exactly one promoted model, ever.
+
+**Q: The retrain can take 30 seconds. How do you handle that in an HTTP API?**
+A: It runs as a FastAPI `BackgroundTasks` job, not synchronously in the request — a
+30-second admin call would risk timing out on Render's free tier. The retrain endpoint
+schedules the job and returns immediately; the frontend polls the summary endpoint, which
+exposes a simple `retrain_status` (idle/running/done/error). It's a lightweight version of
+an async job queue — appropriate for a single-admin, occasional-retrain workload without
+pulling in Celery or a broker.
+
+**Q: How is any of this tested without a 30-second grid search in the suite?**
+A: The retrain has a fast path (fixed hyperparameters, no grid search), the same technique
+the test-model fixture uses — so tests train a genuine model in a few seconds. The tests
+isolate the model path and candidate directory to a temp dir so a promotion test can never
+clobber the developer's real model, and they assert the important invariants directly: that
+collection only returns approved-unconsumed-with-snapshot corrections, that a retrain writes
+a real candidate without touching the live model file, that a deliberately-worse candidate is
+blocked without `force` and succeeds with it, and that corrections are consumed only on a
+successful promotion.

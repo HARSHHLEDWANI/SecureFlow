@@ -26,6 +26,7 @@ backend/data/chain.json
 backend/data/*.joblib
 backend/data/model_metrics.json
 backend/data/smoke*
+backend/data/models/            # feedback-loop candidate models (Feature B)
 
 # Logs
 logs/

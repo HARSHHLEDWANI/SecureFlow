@@ -14,10 +14,13 @@ from app.core.pipeline import (
     refresh_risk_cache,
     run_pipeline,
 )
+from app.config import get_settings
+from app.core.explain import explain_decision
 from app.core.redis_client import redis_client
-from app.database import RiskTier, Transaction, User, get_db
+from app.database import AuditLog, RiskTier, Transaction, User, get_db
 from app.dependencies import RateLimiter, envelope, get_current_user, is_staff
 from app.models.transaction import (
+    ExplanationResult,
     TransactionAnalyzeRequest,
     TransactionResult,
     TransactionSummary,
@@ -26,7 +29,22 @@ from app.models.transaction import (
 from app.utils.logger import get_logger
 
 logger = get_logger("transaction")
+settings = get_settings()
 router = APIRouter(prefix="/transaction", tags=["transaction"])
+
+
+def _txn_or_404(db: Session, txn_id: str, user: User) -> Transaction:
+    """Fetch a transaction, enforcing the ownership rule.
+
+    A VIEWER may only access their own transaction; ANALYST/ADMIN may access any.
+    A missing transaction *and* a cross-user access by a VIEWER both return 404,
+    so the endpoint never leaks the existence of another user's transaction id.
+    Shared by the status and explain endpoints so they use one identical check.
+    """
+    txn = db.get(Transaction, txn_id)
+    if txn is None or (not is_staff(user) and txn.user_id != user.id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Transaction not found")
+    return txn
 
 
 @router.post("/analyze", dependencies=[Depends(RateLimiter("analyze"))])
@@ -94,9 +112,7 @@ def transaction_status(
     Cross-user reads by a VIEWER return 404 (not 403) so the endpoint does not
     leak the existence of other users' transaction ids.
     """
-    txn = db.get(Transaction, txn_id)
-    if txn is None or (not is_staff(user) and txn.user_id != user.id):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Transaction not found")
+    txn = _txn_or_404(db, txn_id, user)
     summary = TransactionSummary(
         id=txn.id,
         from_vpa=txn.from_vpa,
@@ -146,6 +162,47 @@ def list_transactions(
         for t in rows
     ]
     return envelope(items)
+
+
+@router.post(
+    "/{txn_id}/explain",
+    dependencies=[Depends(RateLimiter("explain", limit=settings.explain_rate_limit_requests))],
+)
+def explain_transaction(
+    txn_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Return a plain-English explanation of an already-made fraud decision.
+
+    Access uses the *same* ownership rule as ``/{txn_id}/status``. The LLM only
+    explains the decision — it never influences the score, tier, or action. The
+    result is cached in Redis per transaction so repeat clicks don't re-spend the
+    API budget; the endpoint is rate-limited more tightly than the others because
+    it has a real per-call cost. Falls back to a deterministic template when the
+    LLM is unavailable (``source`` says which path produced the text).
+    """
+    txn = _txn_or_404(db, txn_id, user)
+
+    cache_key = f"explain:{txn_id}"
+    cached = redis_client.cache_get_json(cache_key)
+    if cached is not None:
+        return envelope(ExplanationResult(**cached, cached=True).model_dump())
+
+    # Reconstruct the decision context from the stored ANALYZE audit log.
+    log = db.execute(
+        select(AuditLog)
+        .where(AuditLog.transaction_id == txn.id, AuditLog.action.like("ANALYZE_%"))
+        .order_by(AuditLog.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    meta = (log.audit_metadata if log else None) or {}
+    components = meta.get("components", {})
+    feature_contributions = meta.get("feature_contributions", [])
+
+    result = explain_decision(txn, components, feature_contributions)
+    redis_client.cache_set_json(cache_key, result, ttl=settings.explain_cache_ttl_seconds)
+    return envelope(ExplanationResult(**result, cached=False).model_dump())
 
 
 risk_router = APIRouter(prefix="/risk-score", tags=["transaction"])

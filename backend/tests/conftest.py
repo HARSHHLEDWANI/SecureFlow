@@ -10,6 +10,13 @@ os.environ["BLOCKCHAIN_PATH"] = os.path.join(_TMP, "chain.json")
 os.environ["BLOCKCHAIN_DIFFICULTY"] = "2"
 os.environ["RATE_LIMIT_REQUESTS"] = "1000"
 os.environ["ENVIRONMENT"] = "development"
+# Isolate the model + feedback candidates to the temp dir so tests (esp. model
+# promotion) never touch the developer's real ./data model. The autouse
+# ensure_trained_model fixture fast-trains into these paths if absent.
+os.environ["MODEL_PATH"] = os.path.join(_TMP, "fraud_model.joblib")
+os.environ["MODEL_METRICS_PATH"] = os.path.join(_TMP, "model_metrics.json")
+os.environ["FEEDBACK_MODEL_DIR"] = os.path.join(_TMP, "models")
+os.environ["FEEDBACK_RETRAIN_FAST"] = "true"
 
 import fakeredis  # noqa: E402
 import pytest  # noqa: E402

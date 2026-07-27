@@ -8,14 +8,16 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.core import governance as gov
 from app.database import OverrideProposal, ProposalStatus, Transaction, User, get_db
 from app.dependencies import envelope, get_current_user
-from app.models.governance import ProposalCreate, TamperRequest, VoteRequest
+from app.ml import feedback
+from app.models.governance import ProposalCreate, PromoteRequest, TamperRequest, VoteRequest
 from app.utils.logger import get_logger
 
 logger = get_logger("governance_api")
@@ -191,3 +193,53 @@ def watchdog_status(_: User = AdminOnly) -> dict:
 def watchdog_scan(_: User = AdminOnly) -> dict:
     """Run one integrity scan immediately (auto-heals any tampering found)."""
     return envelope(gov.scan_and_heal_once())
+
+
+# ── Model feedback loop (Feature B) ────────────────────────────────────────────
+
+
+@router.get("/feedback/summary")
+def feedback_summary(db: Session = Depends(get_db), _: User = AdminOnly) -> dict:
+    """Pending approved corrections, the live model's metrics, and any candidates."""
+    return envelope(
+        {
+            "unconsumed_corrections": feedback.unconsumed_count(db),
+            "min_examples": get_settings().feedback_min_examples,
+            "live_metrics": feedback._slim(feedback.live_metrics()),
+            "candidates": feedback.list_candidates(),
+            "retrain_status": feedback.retrain_status,
+        }
+    )
+
+
+@router.post("/feedback/retrain")
+def feedback_retrain(
+    background: BackgroundTasks, db: Session = Depends(get_db), _: User = AdminOnly
+) -> dict:
+    """Kick off a retrain (synthetic + weighted corrections) as a background job.
+
+    A full grid-search retrain takes ~25-30s, so it runs off the request thread;
+    poll ``/feedback/summary`` (``retrain_status``) for progress. Never promotes.
+    """
+    if feedback.retrain_status.get("state") == "running":
+        raise HTTPException(status.HTTP_409_CONFLICT, "A retrain is already running")
+    pending = feedback.unconsumed_count(db)
+    if pending < get_settings().feedback_min_examples:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Need at least {get_settings().feedback_min_examples} approved correction(s); "
+            f"have {pending}.",
+        )
+    background.add_task(feedback.run_retrain_job)
+    return envelope({"scheduled": True, "pending_corrections": pending})
+
+
+@router.post("/feedback/promote")
+def feedback_promote(
+    body: PromoteRequest, db: Session = Depends(get_db), _: User = AdminOnly
+) -> dict:
+    """Promote a candidate to the live model, honoring the regression guard."""
+    try:
+        return envelope(feedback.promote_candidate(db, body.version, force=body.force))
+    except feedback.FeedbackError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))

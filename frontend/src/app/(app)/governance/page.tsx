@@ -24,6 +24,7 @@ import type { Council, IntegrityResult, Proposal, TransactionSummary } from "@/l
 type WatchdogState = Awaited<ReturnType<typeof api.governance.watchdog>>;
 import { formatINR, shortHash, formatDateTime } from "@/lib/format";
 import { Panel, EmptyState } from "@/components/ui";
+import ModelFeedbackPanel from "@/components/governance/ModelFeedbackPanel";
 
 const STATUS_META: Record<string, { label: string; color: string; bg: string }> = {
   ALLOWED: { label: "Allowed", color: "var(--success)", bg: "rgba(46,160,67,0.14)" },
@@ -479,6 +480,8 @@ export default function GovernancePage() {
           </div>
         )}
       </Panel>
+
+      <ModelFeedbackPanel />
     </div>
   );
 }

@@ -142,6 +142,13 @@ class Transaction(Base):
     block_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     block_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
+    # The exact engineered feature vector the model saw at scoring time. Persisted
+    # (going forward) so the governance→model feedback loop can retrain on the real
+    # vector — recomputing it later would not match, because velocity/geo/new-device
+    # features are time- and state-dependent. Null for transactions scored before
+    # this column shipped; those are not eligible for the feedback loop.
+    feature_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True
     )
@@ -191,6 +198,9 @@ class OverrideProposal(Base):
     )
     required_approvals: Mapped[int] = mapped_column(Integer, default=4)
     diverged: Mapped[bool] = mapped_column(default=False)
+    # True once this approved correction has been folded into a promoted model, so
+    # a given human correction is only ever used once across retrains.
+    consumed_for_training: Mapped[bool] = mapped_column(default=False)
     block_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     block_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

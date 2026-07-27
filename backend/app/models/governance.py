@@ -18,3 +18,11 @@ class VoteRequest(BaseModel):
 
 class TamperRequest(BaseModel):
     new_status: str = Field(..., pattern=STATUS_PATTERN)
+
+
+class PromoteRequest(BaseModel):
+    """Promote a retrained candidate model to live (Feature B)."""
+
+    version: int = Field(..., ge=1)
+    # Override the regression guard (only honored when the guard is tripped).
+    force: bool = False

@@ -40,6 +40,52 @@ export interface FeatureContribution {
   importance: number;
 }
 
+export interface Explanation {
+  explanation: string;
+  source: "llm" | "template" | string;
+  cached: boolean;
+}
+
+export interface ModelScores {
+  auc_roc?: number;
+  recall?: number;
+  precision?: number;
+  f1?: number;
+  accuracy?: number;
+  version?: string;
+}
+
+export interface RegressionGuard {
+  ok: boolean;
+  reasons: string[];
+  auc_drop: number;
+  recall_drop: number;
+  live: ModelScores | null;
+  candidate: ModelScores | null;
+}
+
+export interface FeedbackCandidate {
+  version: number;
+  metrics: ModelScores | null;
+  n_corrections: number | null;
+  trained_at: string | null;
+  regression: RegressionGuard;
+}
+
+export interface FeedbackSummary {
+  unconsumed_corrections: number;
+  min_examples: number;
+  live_metrics: ModelScores | null;
+  candidates: FeedbackCandidate[];
+  retrain_status: {
+    state: "idle" | "running" | "done" | "error";
+    started_at: string | null;
+    finished_at: string | null;
+    result: { version: number; metrics: ModelScores | null; regression: RegressionGuard } | null;
+    error: string | null;
+  };
+}
+
 export interface AnalyzeResult {
   id: string;
   from_vpa: string;

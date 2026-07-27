@@ -135,3 +135,11 @@ def get_model_service() -> ModelService:
                 svc.load()
                 _service = svc
     return _service
+
+
+def reload_model_service() -> ModelService:
+    """Force the singleton to reload the model from disk (used after a promotion)."""
+    global _service
+    with _lock:
+        _service = None
+    return get_model_service()

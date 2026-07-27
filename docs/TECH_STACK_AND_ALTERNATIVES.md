@@ -343,6 +343,79 @@ means no infra to run. Perfect for a solo portfolio.
 
 ---
 
+## Anthropic Claude (LLM for "Explain This Decision") — the one external cost
+
+**Here**: the explain endpoint turns the already-computed risk signals into 2–3
+plain-English sentences via the Anthropic API, using **Claude Haiku 4.5** (a
+small/fast/inexpensive model) for a short structured completion. The LLM only
+*explains* a decision the risk engine already made — it never influences the
+score, tier, or action.
+
+**Why reasonable — and the honest cost note**: this is the **one feature in the
+project with an external, per-call cost dependency**. Everything else runs on
+free-tier infra with no marginal cost. The cost is deliberately bounded and kept
+close to zero: it's **on-demand only** (a button, not automatic), **cached in
+Redis per transaction** (repeat clicks are free), **rate-limited more tightly**
+than any other endpoint (10/window vs 60), uses the **cheapest model** with a low
+`max_tokens` (~220), and has a **hard 5s timeout with no retries**. And it
+**degrades to a deterministic template** when the key is absent or the call
+fails — so the app is fully functional with zero configuration and zero cost.
+
+**Alternatives**:
+- **A hosted LLM from another provider (OpenAI, Google Gemini, etc.)** — comparable
+  capability for a task this small. Any of them would work; the tradeoff is
+  provider lock-in and API shape, not capability. Claude was chosen because the
+  fallback-first design makes the provider easily swappable and the small model is
+  cheap.
+- **A local/open-source model (Llama, Mistral via Ollama)** — no per-call cost and
+  full data control. The better call if the explanations must never leave your
+  infra or you want zero marginal cost — but it needs a GPU/host to run, which
+  defeats the free-tier constraint here. The deterministic template is effectively
+  the zero-cost local fallback.
+- **No LLM — a richer rules-based template only** — zero cost, fully deterministic,
+  no external dependency (this is exactly the fallback path). It's honestly *good
+  enough* for most explanations; the LLM buys more natural phrasing and the ability
+  to weave several signals into a sentence. For a system that must be free and
+  offline, drop the LLM and keep only the template.
+
+## Governance → model feedback loop: versioned + manually promoted (Feature B)
+
+**Here**: when the council unanimously approves overturning a decision, that
+correction becomes labeled training data (keyed to the exact feature vector scored
+at the time). An admin can retrain a **separately versioned candidate** model from
+those corrections plus the synthetic dataset; a **regression guard** blocks
+promoting a worse candidate; nothing is **ever auto-promoted**.
+
+**Why reasonable**: the corrections are few, human-verified, and high-stakes
+(they change how fraud is scored), so the pipeline is built around *not trusting
+them blindly*: weight them above synthetic data but never let them silently
+degrade the model, keep every candidate as an immutable versioned artifact, and
+require an explicit human promotion behind a metric guard. It closes the loop
+between the governance system and the ML model without introducing a way to
+quietly poison the model.
+
+**Alternatives**:
+- **Online / incremental learning** (update the live model as corrections arrive) —
+  adapts fastest. Wrong here: it makes the live model a moving target with no
+  reviewable artifact, and a handful of mislabeled or adversarial corrections could
+  quietly corrupt production with no gate. Versioned-and-promoted trades adaptation
+  speed for safety and auditability, which is the right trade for fraud scoring.
+- **Just discard governance corrections** (what the system did before Feature B) —
+  simplest; the correction updates the transaction and the chain, then the training
+  signal is thrown away. Perfectly fine if you don't want a feedback loop at all —
+  but it wastes genuinely valuable human-labeled data.
+- **A separate human-in-the-loop labeling/MLOps platform** (e.g. a feature store +
+  a training pipeline in Airflow/Kubeflow, model registry, CI-gated promotion) — the
+  "real" production answer. Massive overkill for a solo portfolio project; Feature B
+  is a deliberately minimal, self-contained version of that same shape (feature
+  snapshot → labeled corrections → versioned candidate → guarded manual promotion).
+- **Note on why features are snapshotted, not recomputed**: velocity, geo-history,
+  and new-device features are time- and state-dependent. Recomputing them after the
+  fact from current Redis/DB state would not match what the model actually scored, so
+  training on a drifted vector would quietly corrupt the model. The loop therefore
+  only uses transactions with a persisted `feature_snapshot` (scored after the
+  feature shipped) and never backfills historical transactions.
+
 ## Notable design decision: WebSocket authentication
 
 The live alert feed carries real transaction PII (VPAs, amounts, risk scores). The
