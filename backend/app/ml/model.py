@@ -36,13 +36,15 @@ class ModelService:
             return
         try:
             self._bundle = joblib.load(path)
-            model = self._bundle["model"]
+            # ``model`` is the calibrated classifier; ``base_model`` is the raw forest it
+            # wraps (importances live there). Older bundles have no ``base_model``.
+            base = self._bundle.get("base_model") or self._bundle["model"]
             # Single-row inference is fastest single-threaded: parallel tree
             # dispatch (n_jobs=-1 from training) adds overhead per call.
-            model.n_jobs = 1
+            base.n_jobs = 1
             if self._bundle.get("iso") is not None:
                 self._bundle["iso"].n_jobs = 1
-            self._importance = dict(zip(FEATURE_COLUMNS, model.feature_importances_))
+            self._importance = dict(zip(FEATURE_COLUMNS, base.feature_importances_))
             logger.info("Loaded model v%s", self._bundle.get("version", "?"))
         except (OSError, KeyError, ValueError) as exc:
             logger.error("Failed to load model (%s) - using heuristic fallback", exc)

@@ -16,6 +16,11 @@ os.environ["ENVIRONMENT"] = "development"
 os.environ["MODEL_PATH"] = os.path.join(_TMP, "fraud_model.joblib")
 os.environ["MODEL_METRICS_PATH"] = os.path.join(_TMP, "model_metrics.json")
 os.environ["FEEDBACK_MODEL_DIR"] = os.path.join(_TMP, "models")
+# Frozen holdout / train pool written by training; benchmark outputs kept apart.
+os.environ["HOLDOUT_PATH"] = os.path.join(_TMP, "holdout.parquet")
+os.environ["TRAIN_POOL_PATH"] = os.path.join(_TMP, "train_pool.parquet")
+os.environ["BENCHMARK_MODEL_PATH"] = os.path.join(_TMP, "benchmark_model.joblib")
+os.environ["BENCHMARK_METRICS_PATH"] = os.path.join(_TMP, "benchmark_metrics.json")
 os.environ["FEEDBACK_RETRAIN_FAST"] = "true"
 
 import fakeredis  # noqa: E402

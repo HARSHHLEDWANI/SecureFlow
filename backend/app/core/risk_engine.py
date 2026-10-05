@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.database import RiskTier, TxnStatus
+from app.ml.thresholds import DEFAULT_LOW_MAX, DEFAULT_MEDIUM_MAX, load_risk_thresholds
 from app.utils.helpers import clamp
 
 # Signal weights (sum = 100). ML is advisory (55% combined); rules make up the rest.
@@ -22,16 +23,23 @@ WEIGHTS = {
     "time": 4.0,
 }
 
-LOW_MAX = 30
-MEDIUM_MAX = 70
+# Fallback cutoffs. The live cutoffs are cost-optimal values learned at training time
+# (ml/thresholds.py) and read from the model metrics; these apply when none exist.
+LOW_MAX = DEFAULT_LOW_MAX
+MEDIUM_MAX = DEFAULT_MEDIUM_MAX
+
+
+def tier_and_status_for(score: int, low_max: int, medium_max: int) -> tuple[RiskTier, TxnStatus]:
+    """Map a 0-100 score to a tier/status for explicit cutoffs."""
+    if score <= low_max:
+        return RiskTier.LOW, TxnStatus.ALLOWED
+    if score <= medium_max:
+        return RiskTier.MEDIUM, TxnStatus.STEP_UP
+    return RiskTier.HIGH, TxnStatus.BLOCKED
 
 
 def _tier_and_status(score: int) -> tuple[RiskTier, TxnStatus]:
-    if score <= LOW_MAX:
-        return RiskTier.LOW, TxnStatus.ALLOWED
-    if score <= MEDIUM_MAX:
-        return RiskTier.MEDIUM, TxnStatus.STEP_UP
-    return RiskTier.HIGH, TxnStatus.BLOCKED
+    return tier_and_status_for(score, *load_risk_thresholds())
 
 
 def compute_risk(features: dict[str, float], ml_result: dict[str, Any]) -> dict[str, Any]:

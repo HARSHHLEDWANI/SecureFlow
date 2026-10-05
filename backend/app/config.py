@@ -6,6 +6,7 @@ All settings are validated through ``pydantic-settings``. A single cached
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -47,6 +48,9 @@ class Settings(BaseSettings):
     # the live model are scored on the same ``holdout`` rows (see ml/feedback.py).
     holdout_path: str = "./data/holdout.parquet"
     train_pool_path: str = "./data/train_pool.parquet"
+    # Benchmark (PaySim) run artifacts - kept apart from the live demo model.
+    benchmark_model_path: str = "./data/benchmark_model.joblib"
+    benchmark_metrics_path: str = "./data/benchmark_metrics.json"
     # PaySim benchmark CSV (never downloaded by the code - see ml/datasets/paysim.py).
     paysim_path: str = ""
     paysim_max_rows: int = 0            # 0 = all rows; N = first N rows in step order
@@ -54,6 +58,13 @@ class Settings(BaseSettings):
     # validation/test keep the true base rate. Calibration is fitted on the untouched
     # validation split, which corrects the probability shift this introduces.
     train_negative_ratio: int = 50
+    # Risk-tier cutoffs. Precedence: explicit RISK_LOW_MAX/RISK_MEDIUM_MAX, then the
+    # cost-optimal pair in the live model's metrics if USE_LEARNED_THRESHOLDS=true, then
+    # the legacy 30/70. Learned cutoffs are tied to the model they were tuned on, and the
+    # demo model's are tuned at a 13% fraud rate, so they are opt-in.
+    risk_low_max: Optional[int] = None
+    risk_medium_max: Optional[int] = None
+    use_learned_thresholds: bool = False
     # Cost matrix for threshold selection (ml/thresholds.py).
     cost_false_positive: float = 1.0      # blocking a legitimate payment
     cost_false_negative: float = 50.0     # allowing a fraudulent payment (1:50)

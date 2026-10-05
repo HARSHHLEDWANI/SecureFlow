@@ -165,7 +165,7 @@ ATTACK_SCENARIOS: list[dict[str, Any]] = [
         "id": "midnight_anomaly",
         "name": "Midnight Unusual Activity",
         "emoji": "🟡",
-        "description": "₹25k at 3 AM to a new payee — the user never transacts at night.",
+        "description": "₹25k at 3 AM to a new payee, 4th payment this hour — the user never transacts at night.",
         "expected_result": "STEP-UP AUTH — Elevated Risk (time anomaly)",
         "sender": "harsh@upi",
         "receiver": "merchant@ybl",
@@ -173,7 +173,7 @@ ATTACK_SCENARIOS: list[dict[str, Any]] = [
         "txn_type": "P2P",
         "city": "Pune",
         "device": "device_001",
-        "signal_overrides": {"hour": 3, "is_new_beneficiary": True},
+        "signal_overrides": {"hour": 3, "is_new_beneficiary": True, "velocity_1h": 4},
     },
     {
         "id": "account_takeover",

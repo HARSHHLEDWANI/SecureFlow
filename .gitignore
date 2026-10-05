@@ -25,6 +25,9 @@ backend/data/*.db-journal
 backend/data/chain.json
 backend/data/*.joblib
 backend/data/model_metrics.json
+backend/data/*.parquet
+backend/data/benchmark_*
+backend/data/paysim*.csv
 backend/data/smoke*
 backend/data/models/            # feedback-loop candidate models (Feature B)
 
