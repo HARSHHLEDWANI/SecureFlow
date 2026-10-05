@@ -121,6 +121,7 @@ class UPISimulator:
             signals=signals,
             tracker=tracker,
             note=note,
+            is_demo=True,  # every Lab row is flagged so analytics and reset can tell it apart
         )
 
         tracker.rekey(txn.id)

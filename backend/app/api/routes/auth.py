@@ -273,6 +273,9 @@ def refresh(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
 
     state = rt.check(ident.jti, ident.fid)
+    if state is rt.RefreshState.RACED:
+        # Rotated a moment ago by a concurrent request that holds the successor cookie.
+        raise HTTPException(status.HTTP_409_CONFLICT, "Refresh already in progress; retry")
     if state is rt.RefreshState.REUSED:
         rt.revoke_family(ident.fid)
         response.delete_cookie(REFRESH_COOKIE)

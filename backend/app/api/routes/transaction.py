@@ -134,15 +134,19 @@ def list_transactions(
     user: User = Depends(get_current_user),
     limit: int = Query(default=50, ge=1, le=200),
     tier: Optional[str] = Query(default=None, pattern=r"^(LOW|MEDIUM|HIGH)$"),
+    include_demo: bool = Query(default=False, description="Staff only: include UPI Lab rows"),
 ) -> dict:
     """List recent transactions, newest first, optionally filtered by tier.
 
     ANALYST/ADMIN see every user's transactions (this is a fraud-ops tool); a
-    VIEWER is scoped to their own transactions only.
+    VIEWER is scoped to their own transactions only. UPI Lab rows are hidden from the staff
+    view unless ``include_demo=true``.
     """
     stmt = select(Transaction).order_by(Transaction.created_at.desc()).limit(limit)
     if not is_staff(user):
         stmt = stmt.where(Transaction.user_id == user.id)
+    elif not include_demo:
+        stmt = stmt.where(Transaction.is_demo.is_(False))
     if tier:
         stmt = stmt.where(Transaction.risk_tier == RiskTier(tier))
     rows = db.execute(stmt).scalars().all()

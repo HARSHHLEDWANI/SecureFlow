@@ -29,13 +29,25 @@ def _aware(dt):
 
 
 @router.get("/dashboard")
-def dashboard(db: Session = Depends(get_db), user: User = Depends(require_staff)) -> dict:
-    """Aggregated fraud KPIs for the dashboard (Redis-cached for 60s)."""
-    cached = redis_client.cache_get_json(DASHBOARD_CACHE_KEY)
+def dashboard(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_staff),
+    include_demo: bool = Query(default=False, description="Also count UPI Lab (is_demo) rows"),
+) -> dict:
+    """Aggregated fraud KPIs for the dashboard (Redis-cached for 60s).
+
+    UPI Lab rows are excluded unless ``include_demo=true``, so the public demo cannot move
+    the real numbers.
+    """
+    cache_key = DASHBOARD_CACHE_KEY + (":demo" if include_demo else "")
+    cached = redis_client.cache_get_json(cache_key)
     if cached is not None:
         return envelope(cached)
 
-    txns = db.execute(select(Transaction)).scalars().all()
+    stmt = select(Transaction)
+    if not include_demo:
+        stmt = stmt.where(Transaction.is_demo.is_(False))
+    txns = db.execute(stmt).scalars().all()
     total = len(txns)
     tiers = Counter(t.risk_tier.value for t in txns)
     fraud_detected = tiers.get("HIGH", 0)
@@ -79,7 +91,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(require_staff)
         "daily_volume": daily_volume,
         "risk_score_histogram": histogram,
     }
-    redis_client.cache_set_json(DASHBOARD_CACHE_KEY, data, ttl=60)
+    redis_client.cache_set_json(cache_key, data, ttl=60)
     return envelope(data)
 
 
@@ -88,14 +100,13 @@ def recent_alerts(
     db: Session = Depends(get_db),
     user: User = Depends(require_staff),
     limit: int = Query(default=20, ge=1, le=100),
+    include_demo: bool = Query(default=False),
 ) -> dict:
-    """Most recent HIGH/MEDIUM-risk transactions, newest first."""
-    rows = db.execute(
-        select(Transaction)
-        .where(Transaction.risk_tier != RiskTier.LOW)
-        .order_by(Transaction.created_at.desc())
-        .limit(limit)
-    ).scalars().all()
+    """Most recent HIGH/MEDIUM-risk transactions, newest first (Lab rows opt-in)."""
+    stmt = select(Transaction).where(Transaction.risk_tier != RiskTier.LOW)
+    if not include_demo:
+        stmt = stmt.where(Transaction.is_demo.is_(False))
+    rows = db.execute(stmt.order_by(Transaction.created_at.desc()).limit(limit)).scalars().all()
     alerts = [
         {
             "transaction_id": t.id,

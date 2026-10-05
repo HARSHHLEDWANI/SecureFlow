@@ -12,6 +12,14 @@ import pytest
 PREFIX = "/api/v1/upi"
 
 
+@pytest.fixture
+def client(client):
+    """Shadow the plain client with one that carries a UPI Lab demo session, as the frontend does."""
+    token = client.post("/api/v1/upi/session").json()["data"]["token"]
+    client.headers["X-Demo-Session"] = token
+    return client
+
+
 def _data(res):
     assert res.status_code == 200, res.text
     body = res.json()

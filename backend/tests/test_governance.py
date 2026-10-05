@@ -8,6 +8,16 @@ import pytest
 from app.core.governance import COUNCIL_PASSWORD, GOVERNANCE_COUNCIL
 
 API = "/api/v1"
+
+
+@pytest.fixture
+def client(client):
+    """Shadow the plain client with one that carries a UPI Lab demo session, as the frontend does."""
+    token = client.post("/api/v1/upi/session").json()["data"]["token"]
+    client.headers["X-Demo-Session"] = token
+    return client
+
+
 COUNCIL_EMAILS = [c["email"] for c in GOVERNANCE_COUNCIL]
 
 

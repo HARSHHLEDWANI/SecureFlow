@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     jwt_refresh_secret: str = "change_me_too_in_production"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
+    # A just-rotated refresh token presented again within this window (two tabs or two
+    # in-flight requests racing) is answered 409 "retry" instead of being treated as theft.
+    refresh_reuse_grace_seconds: int = 10
 
     # ML
     model_path: str = "./data/fraud_model.joblib"

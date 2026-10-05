@@ -67,7 +67,11 @@ export default function LabPage() {
   // ── Load demo data ──────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     try {
-      const [u, s] = await Promise.all([api.upi.users(), api.upi.scenarios()]);
+      const [u, s] = await Promise.all([
+        api.upi.users(),
+        api.upi.scenarios(),
+        api.upi.ensureSession(), // demo session for the Lab's write endpoints
+      ]);
       setUsers(u.users);
       setScenarios(s.scenarios);
       setSenderVpa((cur) => cur || u.users[0]?.vpa || "");

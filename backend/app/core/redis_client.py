@@ -116,6 +116,17 @@ class RedisClient:
 
     # ── Plain keys with an explicit success signal (token stores) ────────────
 
+    def incr_by(self, key: str, amount: int, ttl: int) -> Optional[int]:
+        """Add ``amount`` to a counter (TTL set on creation). None if Redis is unavailable."""
+
+        def _do(c: redis.Redis) -> int:
+            total = int(c.incrby(key, amount))
+            if total == amount:
+                c.expire(key, ttl)
+            return total
+
+        return self._safe(_do, default=None)
+
     def key_set(self, key: str, value: str, ttl: int) -> bool:
         """Store ``value`` for ``ttl`` seconds. False if Redis is unavailable."""
         return bool(self._safe(lambda c: c.setex(key, ttl, value), default=False))

@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Generator
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Enum as SAEnum,
     Float,
@@ -22,6 +23,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    inspect,
+    text,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -149,6 +152,11 @@ class Transaction(Base):
     # this column shipped; those are not eligible for the feedback loop.
     feature_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # True for every row created by the public UPI Lab (and its seeded history). Demo rows
+    # are excluded from analytics and the staff listing unless ``include_demo=true`` and
+    # are the only rows the Lab's reset may delete.
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True
     )
@@ -251,8 +259,30 @@ class ChainBlock(Base):
     hash: Mapped[str] = mapped_column(String(80), nullable=False)
 
 
+# Columns added after first release. ``create_all`` never alters an existing table, so on a
+# live database they would silently never appear. This idempotent guard adds them until
+# real migrations (Alembic) replace it.  (table, column, DDL type, default literal)
+_ADDED_COLUMNS = [
+    ("transactions", "is_demo", "BOOLEAN", {"sqlite": "0", "postgresql": "FALSE"}),
+]
+
+
+def _ensure_columns() -> None:
+    insp = inspect(engine)
+    dialect = engine.dialect.name
+    for table, column, ddl, defaults in _ADDED_COLUMNS:
+        if not insp.has_table(table):
+            continue
+        if column in {c["name"] for c in insp.get_columns(table)}:
+            continue
+        default = defaults.get(dialect, defaults.get("sqlite", "0"))
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl} NOT NULL DEFAULT {default}"))
+
+
 def init_db() -> None:
-    """Create all tables if they do not yet exist (idempotent)."""
+    """Create all tables if they do not yet exist (idempotent), then add late columns."""
+    _ensure_columns()  # before create_all: existing tables first, new ones are built whole
     Base.metadata.create_all(bind=engine)
 
 

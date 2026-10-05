@@ -279,6 +279,7 @@ def run_pipeline(
     actor_id: Optional[str] = None,
     tracker: Optional[StageTracker] = None,
     note: Optional[str] = None,
+    is_demo: bool = False,
 ) -> tuple[Transaction, dict[str, Any], dict[str, Any]]:
     """Run the full fraud-analysis pipeline and persist the result on-chain.
 
@@ -330,6 +331,7 @@ def run_pipeline(
         status=risk["status"],
         # Snapshot the exact feature vector the model scored, for the feedback loop.
         feature_snapshot=ml_result["features"],
+        is_demo=is_demo,
     )
     db.add(txn)
     db.flush()  # assign txn.id

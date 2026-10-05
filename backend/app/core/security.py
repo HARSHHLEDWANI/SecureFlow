@@ -17,7 +17,7 @@ from app.utils.helpers import utcnow
 settings = get_settings()
 
 ALGORITHM = "HS256"
-TokenType = Literal["access", "refresh"]
+TokenType = Literal["access", "refresh", "demo"]
 
 
 # ── Password hashing ─────────────────────────────────────────────────────────
@@ -47,6 +47,8 @@ def create_token(subject: str, token_type: TokenType = "access", **claims: Any) 
     """Create a signed JWT for ``subject`` with the configured expiry."""
     if token_type == "refresh":
         expires = timedelta(days=settings.refresh_token_expire_days)
+    elif token_type == "demo":
+        expires = timedelta(minutes=settings.demo_session_ttl_minutes)
     else:
         expires = timedelta(minutes=settings.access_token_expire_minutes)
 

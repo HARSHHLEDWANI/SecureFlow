@@ -154,6 +154,7 @@ def test_demo_otp_absent_in_production(client, monkeypatch, caplog):
 
 def test_refresh_rotates_and_old_token_is_single_use(client, monkeypatch):
     _noon(monkeypatch)
+    monkeypatch.setattr(get_settings(), "refresh_reuse_grace_seconds", 0)  # no race leniency
     email, _ = _register(client)
     _full_login(client, email)
     first = client.cookies.get("sf_refresh")
@@ -171,6 +172,22 @@ def test_refresh_rotates_and_old_token_is_single_use(client, monkeypatch):
     # ...so even the legitimate successor no longer works.
     client.cookies.set("sf_refresh", second)
     assert client.post(f"{API}/auth/refresh").status_code == 401
+
+
+def test_a_just_rotated_token_is_a_retryable_race_not_theft(client, monkeypatch):
+    _noon(monkeypatch)
+    monkeypatch.setattr(get_settings(), "refresh_reuse_grace_seconds", 60)
+    email, _ = _register(client)
+    _full_login(client, email)
+    first = client.cookies.get("sf_refresh")
+    assert client.post(f"{API}/auth/refresh").status_code == 200
+    second = client.cookies.get("sf_refresh")
+
+    client.cookies.set("sf_refresh", first)  # two tabs refreshed in the same instant
+    raced = client.post(f"{API}/auth/refresh")
+    assert raced.status_code == 409
+    client.cookies.set("sf_refresh", second)  # family NOT revoked: the successor still works
+    assert client.post(f"{API}/auth/refresh").status_code == 200
 
 
 def test_logout_revokes_the_refresh_token_server_side(client, monkeypatch):
@@ -281,3 +298,168 @@ def test_validation_errors_use_the_envelope(client):
     body = res.json()
     assert body["success"] is False and body["error"].startswith("Validation failed")
     assert {e["field"] for e in body["data"]["errors"]} >= {"email", "password"}
+
+
+# ── 1. UPI Lab is no longer an anonymous write path ─────────────────────────────
+
+PAY = {"sender_vpa": "harsh@upi", "receiver_vpa": "kirana@okaxis", "amount_inr": 350,
+       "txn_type": "P2M", "city": "Pune"}
+
+
+def _demo_headers(client):
+    token = client.post(f"{API}/upi/session").json()["data"]["token"]
+    return {"X-Demo-Session": token}
+
+
+def test_mutating_lab_routes_reject_missing_or_forged_sessions(client):
+    calls = [("post", "/upi/pay", {"json": PAY}), ("post", "/upi/scenario/normal", {}),
+             ("post", "/upi/rapid-fire", {}), ("post", "/upi/reset", {})]
+    for method, path, kw in calls:
+        assert getattr(client, method)(f"{API}{path}", **kw).status_code == 401, path
+        forged = getattr(client, method)(f"{API}{path}", headers={"X-Demo-Session": "garbage"}, **kw)
+        assert forged.status_code == 401, path
+
+
+def test_a_user_access_token_is_not_a_demo_session(client):
+    from app.core.security import create_token
+
+    for tok in (create_token("someone", "access"), create_token("someone", "refresh")):
+        res = client.post(f"{API}/upi/pay", json=PAY, headers={"X-Demo-Session": tok})
+        assert res.status_code == 401
+    # ...and a demo token is not a user token.
+    demo = _demo_headers(client)["X-Demo-Session"]
+    assert client.get(f"{API}/auth/me", headers={"Authorization": f"Bearer {demo}"}).status_code == 401
+
+
+def test_expired_demo_session_is_rejected(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "demo_session_ttl_minutes", -1)
+    headers = _demo_headers(client)
+    res = client.post(f"{API}/upi/pay", json=PAY, headers=headers)
+    assert res.status_code == 401 and "expired" in res.json()["error"].lower()
+
+
+def test_lab_reads_stay_public(client):
+    assert client.get(f"{API}/upi/users").status_code == 200
+    assert client.get(f"{API}/upi/scenarios").status_code == 200
+
+
+def test_lab_rows_are_flagged_and_hidden_from_analytics_and_staff_list(auth_client):
+    client, staff, _ = auth_client
+    res = client.post(f"{API}/upi/pay", json=PAY, headers=_demo_headers(client))
+    assert res.status_code == 200
+    txn_id = res.json()["data"]["txn_id"]
+
+    db = SessionLocal()
+    try:
+        assert db.get(Transaction, txn_id).is_demo is True
+        real = db.query(Transaction).filter(Transaction.is_demo.is_(False)).count()
+        everything = db.query(Transaction).count()
+    finally:
+        db.close()
+    assert everything > real
+
+    default = client.get(f"{API}/analytics/dashboard", headers=staff).json()["data"]
+    with_demo = client.get(f"{API}/analytics/dashboard?include_demo=true", headers=staff).json()["data"]
+    assert default["total_transactions"] == real
+    assert with_demo["total_transactions"] == everything
+
+    ids = lambda r: {t["id"] for t in r.json()["data"]}  # noqa: E731
+    assert txn_id not in ids(client.get(f"{API}/transaction?limit=200", headers=staff))
+    assert txn_id in ids(client.get(f"{API}/transaction?limit=200&include_demo=true", headers=staff))
+
+
+def test_normal_analyze_rows_are_not_demo(auth_client):
+    client, staff, _ = auth_client
+    res = client.post(f"{API}/transaction/analyze", headers=staff, json={
+        "to_vpa": "shop@okaxis", "amount_inr": 500, "txn_type": "P2M", "device_id": "trusted-device",
+        "location_lat": 19.07, "location_lon": 72.87})
+    assert res.status_code == 200
+    db = SessionLocal()
+    try:
+        assert db.get(Transaction, res.json()["data"]["id"]).is_demo is False
+    finally:
+        db.close()
+
+
+def test_per_session_transaction_cap(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "demo_session_max_transactions", 2)
+    h = _demo_headers(client)
+    assert client.post(f"{API}/upi/pay", json=PAY, headers=h).status_code == 200
+    assert client.post(f"{API}/upi/pay", json=PAY, headers=h).status_code == 200
+    third = client.post(f"{API}/upi/pay", json=PAY, headers=h)
+    assert third.status_code == 429 and "session limit" in third.json()["error"].lower()
+    # A burst is charged for every transaction it would create.
+    h2 = _demo_headers(client)
+    assert client.post(f"{API}/upi/rapid-fire", headers=h2).status_code == 429
+    assert client.post(f"{API}/upi/pay", json=PAY, headers=_demo_headers(client)).status_code == 200
+
+
+def test_session_cap_still_holds_with_redis_down(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "demo_session_max_transactions", 1)
+    h = _demo_headers(client)
+    _redis_down(monkeypatch)
+    assert client.post(f"{API}/upi/pay", json=PAY, headers=h).status_code == 200
+    assert client.post(f"{API}/upi/pay", json=PAY, headers=h).status_code == 429
+
+
+def test_global_demo_row_cap(client, monkeypatch):
+    db = SessionLocal()
+    try:
+        demo_rows = db.query(Transaction).filter(Transaction.is_demo.is_(True)).count()
+    finally:
+        db.close()
+    monkeypatch.setattr(get_settings(), "demo_max_total_transactions", demo_rows)
+    res = client.post(f"{API}/upi/pay", json=PAY, headers=_demo_headers(client))
+    assert res.status_code == 429 and "full" in res.json()["error"].lower()
+
+
+def test_session_issuance_is_rate_limited(client):
+    codes = [client.post(f"{API}/upi/session").status_code for _ in range(12)]
+    assert codes[:10] == [200] * 10 and 429 in codes[10:]
+
+
+def test_reset_deletes_only_demo_rows(client):
+    real_email, _ = _register(client)
+    _add_txn(real_email, "dev-real")  # a genuine (is_demo=False) row
+    h = _demo_headers(client)
+    client.post(f"{API}/upi/pay", json=PAY, headers=h)
+
+    assert client.post(f"{API}/upi/reset", headers=h).status_code == 200
+
+    db = SessionLocal()
+    try:
+        real_user = db.query(User).filter(User.email == real_email).one()
+        kept = db.query(Transaction).filter(Transaction.user_id == real_user.id).count()
+        demo_ids = [u.id for u in db.query(User).filter(User.email.like("%@secureflow.local"))]
+        leaked = db.query(Transaction).filter(
+            Transaction.user_id.in_(demo_ids), Transaction.is_demo.is_(False)).count()
+        reseeded = db.query(Transaction).filter(Transaction.is_demo.is_(True)).count()
+    finally:
+        db.close()
+    assert kept == 1 and leaked == 0 and reseeded > 0
+
+
+def test_every_state_changing_route_requires_a_user_or_demo_token():
+    """Route audit: nothing mutates state anonymously except the auth endpoints themselves."""
+    from fastapi.routing import APIRoute
+
+    from app.main import app
+
+    guards = {"get_current_user", "require_staff", "require_demo_session", "_checker"}
+    auth_endpoints = {"/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/verify-step-up",
+                      "/api/v1/auth/refresh", "/api/v1/auth/logout", "/api/v1/upi/session"}
+
+    def deps(dependant):
+        for d in dependant.dependencies:
+            yield getattr(d.call, "__name__", "")
+            yield from deps(d)
+
+    unguarded = []
+    for route in app.routes:
+        if not isinstance(route, APIRoute) or not (route.methods & {"POST", "PUT", "PATCH", "DELETE"}):
+            continue
+        if route.path in auth_endpoints:
+            continue
+        if not guards & set(deps(route.dependant)):
+            unguarded.append(f"{sorted(route.methods)} {route.path}")
+    assert unguarded == []

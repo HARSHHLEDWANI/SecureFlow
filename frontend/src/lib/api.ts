@@ -1,5 +1,9 @@
 // Typed API client for the SecureFlow FastAPI backend.
 // Access token is kept in localStorage; the refresh token is an httpOnly cookie.
+//
+// Response contract: every body, success or failure, is the envelope
+// { success, data, error } - including HTTP errors (previously { detail }) and 422
+// validation failures (error = summary, data.errors = per-field). Status codes are unchanged.
 import type {
   Alert,
   AnalyzeResult,
@@ -78,17 +82,32 @@ async function request<T>(path: string, options: RequestInit = {}, retry = true)
 
   if (!res.ok) {
     const detail =
-      (body as { detail?: string; error?: string })?.detail ??
       (body as { error?: string })?.error ??
+      (body as { detail?: string })?.detail ?? // legacy shape, kept for older backends
       `HTTP ${res.status}`;
     throw new ApiError(detail, res.status);
   }
   return (body as Envelope<T>).data;
 }
 
-async function tryRefresh(): Promise<boolean> {
+// Refresh tokens are single-use (rotated server-side), so concurrent 401s must share ONE
+// refresh call: a second call with the old cookie would look like token theft.
+let refreshInFlight: Promise<boolean> | null = null;
+
+function tryRefresh(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = doRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+async function doRefresh(attempt = 0): Promise<boolean> {
   try {
     const res = await fetch(`${BASE}/auth/refresh`, { method: "POST", credentials: "include" });
+    // 409: another tab rotated the cookie a moment ago - retry once with the new one.
+    if (res.status === 409 && attempt < 1) return doRefresh(attempt + 1);
     if (!res.ok) return false;
     const json = (await res.json()) as Envelope<{ accessToken: string }>;
     if (json.data?.accessToken) {
@@ -98,6 +117,37 @@ async function tryRefresh(): Promise<boolean> {
     return false;
   } catch {
     return false;
+  }
+}
+
+// UPI Lab writes need a short-lived demo session (POST /upi/session), sent as
+// X-Demo-Session. Fetched lazily and on Lab page load; renewed shortly before expiry.
+let demoSession: { token: string; expiresAt: number } | null = null;
+
+async function demoHeaders(): Promise<Record<string, string>> {
+  if (!demoSession || Date.now() > demoSession.expiresAt - 30_000) {
+    const s = await request<{ token: string; expires_in: number }>(
+      "/upi/session",
+      { method: "POST" },
+      false,
+    );
+    demoSession = { token: s.token, expiresAt: Date.now() + s.expires_in * 1000 };
+  }
+  return { "X-Demo-Session": demoSession.token };
+}
+
+async function demoRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      // retry=false: a 401 here is about the demo session, not the user's login.
+      return await request<T>(path, { ...options, headers: await demoHeaders() }, false);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401 && attempt === 0) {
+        demoSession = null; // expired or rejected: get a fresh one and retry once
+        continue;
+      }
+      throw e;
+    }
   }
 }
 
@@ -157,8 +207,11 @@ export const api = {
 
   health: () => request<HealthStatus>("/health"),
 
-  // ── UPI Simulation Lab (unauthenticated demo surface) ────────────────────────
+  // ── UPI Simulation Lab (public reads; writes need a demo session) ───────────
   upi: {
+    ensureSession: async () => {
+      await demoHeaders();
+    },
     users: () =>
       request<{ users: UpiDemoUser[]; demo_password: string; cities: Record<string, [number, number]> }>(
         "/upi/users",
@@ -172,12 +225,13 @@ export const api = {
       note?: string | null;
       city?: string | null;
       device_id?: string | null;
-    }) => request<UpiPayResult>("/upi/pay", { method: "POST", body: JSON.stringify(body) }),
+    }) => demoRequest<UpiPayResult>("/upi/pay", { method: "POST", body: JSON.stringify(body) }),
     runScenario: (id: string) =>
-      request<UpiScenarioRun>(`/upi/scenario/${id}`, { method: "POST" }),
+      demoRequest<UpiScenarioRun>(`/upi/scenario/${id}`, { method: "POST" }),
     history: (vpa: string, limit = 25) =>
       request<UpiHistory>(`/upi/user/${encodeURIComponent(vpa)}/history?limit=${limit}`),
-    reset: () => request<{ reset: boolean; users_seeded: number }>("/upi/reset", { method: "POST" }),
+    reset: () =>
+      demoRequest<{ reset: boolean; users_seeded: number }>("/upi/reset", { method: "POST" }),
   },
 
   // ── Multi-admin governance (ADMIN only) ──────────────────────────────────────

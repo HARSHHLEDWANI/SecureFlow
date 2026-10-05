@@ -1,9 +1,13 @@
 """UPI Simulation Lab endpoints.
 
 A demonstration surface that drives realistic UPI payments through SecureFlow's
-real fraud-detection pipeline. These endpoints are intentionally unauthenticated
-so the in-browser "Guided Demo" is one click; they act on the *selected demo
-user*, never on a real account.
+real fraud-detection pipeline. They act on the *selected demo user*, never on a real
+account, and every row they create is flagged ``is_demo``.
+
+Reads are public. Every mutating route (pay, scenario, rapid-fire, reset) requires a
+short-lived demo session token from ``POST /upi/session`` (sent as ``X-Demo-Session``;
+the frontend fetches one on page load, so the demo stays one click), is rate-limited far
+more tightly than the rest of the API, and counts against per-session and global caps.
 """
 from __future__ import annotations
 
@@ -11,8 +15,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.demo_data import CITIES, DEMO_PASSWORD, DEMO_USERS
+from app.core.demo_data import CITIES, DEMO_PASSWORD, DEMO_USERS, SCENARIO_BY_ID
+from app.config import get_settings
 from app.core.demo_seed import demo_user_id, reset_demo
+from app.core.demo_session import enforce_quota, issue_session, require_demo_session
 from app.core.redis_client import redis_client
 from app.core.upi_simulator import UPIValidationError, scenarios_public, simulator
 from app.database import Transaction, User, get_db
@@ -22,6 +28,12 @@ from app.utils.logger import get_logger
 
 logger = get_logger("upi")
 router = APIRouter(prefix="/upi", tags=["upi-lab"])
+settings = get_settings()
+
+# Lab writes are limited far below the global 60/min; reset (a bulk delete + reseed) more still.
+_lab_write_limit = RateLimiter("upi_pay", limit=settings.demo_rate_limit_requests)
+_lab_reset_limit = RateLimiter("upi_reset", limit=5)
+_session_limit = RateLimiter("upi_session", limit=settings.demo_session_rate_limit)
 
 
 @router.get("/users")
@@ -63,9 +75,20 @@ def list_scenarios() -> dict:
     return envelope({"scenarios": scenarios_public()})
 
 
-@router.post("/pay", dependencies=[Depends(RateLimiter("upi_pay"))])
-def upi_pay(req: UPIPayRequest, db: Session = Depends(get_db)) -> dict:
+@router.post("/session", dependencies=[Depends(_session_limit)])
+def create_session() -> dict:
+    """Issue a short-lived demo session token for the Lab's mutating endpoints."""
+    return envelope(issue_session())
+
+
+@router.post("/pay", dependencies=[Depends(_lab_write_limit)])
+def upi_pay(
+    req: UPIPayRequest,
+    db: Session = Depends(get_db),
+    sid: str = Depends(require_demo_session),
+) -> dict:
     """Process a single UPI payment through the real detection pipeline."""
+    enforce_quota(db, sid, 1)
     try:
         result = simulator.process_payment(
             db,
@@ -82,9 +105,17 @@ def upi_pay(req: UPIPayRequest, db: Session = Depends(get_db)) -> dict:
     return envelope(UPIPayResult(**result).model_dump())
 
 
-@router.post("/scenario/{scenario_id}", dependencies=[Depends(RateLimiter("upi_pay"))])
-def run_scenario(scenario_id: str, db: Session = Depends(get_db)) -> dict:
+@router.post("/scenario/{scenario_id}", dependencies=[Depends(_lab_write_limit)])
+def run_scenario(
+    scenario_id: str,
+    db: Session = Depends(get_db),
+    sid: str = Depends(require_demo_session),
+) -> dict:
     """Run one preset scenario end-to-end through the pipeline."""
+    scn = SCENARIO_BY_ID.get(scenario_id)
+    if scn is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown scenario '{scenario_id}'")
+    enforce_quota(db, sid, _rapid_fire_len(scn) if "rapid_fire" in scn else 1)
     try:
         payload = simulator.run_scenario(db, scenario_id)
     except UPIValidationError as exc:
@@ -92,9 +123,10 @@ def run_scenario(scenario_id: str, db: Session = Depends(get_db)) -> dict:
     return envelope(payload)
 
 
-@router.post("/rapid-fire", dependencies=[Depends(RateLimiter("upi_pay"))])
-def rapid_fire(db: Session = Depends(get_db)) -> dict:
+@router.post("/rapid-fire", dependencies=[Depends(_lab_write_limit)])
+def rapid_fire(db: Session = Depends(get_db), sid: str = Depends(require_demo_session)) -> dict:
     """Run the rapid-fire burst and return the full sequence of results."""
+    enforce_quota(db, sid, _rapid_fire_len(SCENARIO_BY_ID["rapid_fire"]))
     results = simulator.run_rapid_fire(db)
     return envelope({"results": results})
 
@@ -141,8 +173,13 @@ def pipeline_status(txn_id: str) -> dict:
     return envelope(snap)
 
 
-@router.post("/reset")
-def reset() -> dict:
-    """Reset all demo data (users + history) to the initial seeded state."""
+@router.post("/reset", dependencies=[Depends(_lab_reset_limit)])
+def reset(sid: str = Depends(require_demo_session)) -> dict:
+    """Reset demo data to the seeded state. Deletes only ``is_demo`` rows."""
     count = reset_demo()
     return envelope({"reset": True, "users_seeded": count})
+
+
+def _rapid_fire_len(scn: dict) -> int:
+    """How many transactions a rapid-fire scenario will create (for quota accounting)."""
+    return len((scn.get("rapid_fire") or {}).get("amounts") or range(10))

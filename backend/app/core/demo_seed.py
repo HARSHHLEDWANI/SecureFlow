@@ -22,6 +22,7 @@ from app.core.redis_client import redis_client
 from app.core.security import hash_password
 from app.database import (
     AuditLog,
+    OverrideProposal,
     Role,
     RiskTier,
     SessionLocal,
@@ -79,6 +80,7 @@ def _seed_history(db: Session, user: User, spec: dict, rng: random.Random) -> No
                     anomaly_score=round(rng.uniform(0.02, 0.2), 4),
                     status=TxnStatus.ALLOWED,
                     created_at=created,
+                    is_demo=True,
                 )
             )
 
@@ -128,17 +130,24 @@ def seed_demo_users(force: bool = False) -> int:
                 db.flush()
             else:
                 # force=True path — wipe prior transactions/audit for a clean slate.
+                # Only demo rows are ever deleted, and never one a governance proposal
+                # points at (that record is part of the council's audit trail).
+                governed = select(OverrideProposal.transaction_id)
                 txn_ids = [
                     t.id
                     for t in db.execute(
-                        select(Transaction.id).where(Transaction.user_id == uid)
+                        select(Transaction.id).where(
+                            Transaction.user_id == uid,
+                            Transaction.is_demo.is_(True),
+                            Transaction.id.not_in(governed),
+                        )
                     )
                 ]
                 if txn_ids:
                     db.execute(
                         delete(AuditLog).where(AuditLog.transaction_id.in_(txn_ids))
                     )
-                    db.execute(delete(Transaction).where(Transaction.user_id == uid))
+                    db.execute(delete(Transaction).where(Transaction.id.in_(txn_ids)))
                 db.flush()
 
             _seed_history(db, user, spec, rng)
@@ -186,7 +195,7 @@ def reset_demo() -> int:
     fn = getattr(redis_client, "_client", None)
     if fn is not None:
         try:
-            fn.delete("analytics:dashboard")
+            fn.delete("analytics:dashboard", "analytics:dashboard:demo")
         except Exception:  # noqa: BLE001
             pass
     return seed_demo_users(force=True)

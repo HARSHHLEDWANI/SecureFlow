@@ -4,7 +4,7 @@ Every refresh JWT carries a unique ``jti`` and a ``fid`` (family id, constant ac
 rotations of one login). Redis holds the server-side truth::
 
     rt:{jti}        active token   -> {"uid", "fid"}      (TTL = refresh lifetime)
-    rt_used:{jti}   rotated away   -> fid                  (TTL = refresh lifetime)
+    rt_used:{jti}   rotated away   -> {"fid", "at"}        (TTL = refresh lifetime)
     rt_fam_dead:{fid}  family revoked                       (TTL = refresh lifetime)
 
 * ``/auth/refresh`` accepts a token only if ``rt:{jti}`` is active, then retires it
@@ -21,6 +21,7 @@ token is rejected. This fails closed, unlike the cache paths which fail open.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from dataclasses import dataclass
 from enum import Enum
@@ -33,6 +34,7 @@ from app.core.redis_client import redis_client
 class RefreshState(str, Enum):
     ACTIVE = "active"
     REUSED = "reused"          # already rotated: a copied token
+    RACED = "raced"            # rotated moments ago: almost certainly a concurrent refresh
     REVOKED = "revoked"        # family killed (logout / earlier reuse)
     UNKNOWN = "unknown"        # never issued, expired, or evicted
     UNAVAILABLE = "unavailable"  # Redis down: cannot verify
@@ -68,7 +70,14 @@ def check(jti: str, fid: str) -> RefreshState:
         return RefreshState.REVOKED
     if redis_client.key_get(f"rt:{jti}") is not None:
         return RefreshState.ACTIVE
-    if redis_client.key_get(f"rt_used:{jti}") is not None:
+    used = redis_client.key_get(f"rt_used:{jti}")
+    if used is not None:
+        try:
+            age = time.time() - float(json.loads(used)["at"])
+        except (ValueError, KeyError, TypeError):
+            age = float("inf")
+        if age < get_settings().refresh_reuse_grace_seconds:
+            return RefreshState.RACED
         return RefreshState.REUSED
     return RefreshState.UNKNOWN
 
@@ -76,7 +85,7 @@ def check(jti: str, fid: str) -> RefreshState:
 def retire(jti: str, fid: str) -> None:
     """Mark ``jti`` as rotated away (a later presentation is reuse)."""
     redis_client.key_delete(f"rt:{jti}")
-    redis_client.key_set(f"rt_used:{jti}", fid, _ttl())
+    redis_client.key_set(f"rt_used:{jti}", json.dumps({"fid": fid, "at": time.time()}), _ttl())
 
 
 def revoke_family(fid: str) -> None:
