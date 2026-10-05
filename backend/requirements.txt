@@ -22,6 +22,7 @@ scikit-learn==1.6.0
 numpy==2.2.1
 pandas==2.2.3
 joblib==1.4.2
+pyarrow==25.0.1       # frozen holdout / train pool (parquet)
 
 # ── Auth / security ──────────────────────────────────────────────────────────
 PyJWT==2.10.1
@@ -33,5 +34,6 @@ groq==1.6.0
 # ── Testing ──────────────────────────────────────────────────────────────────
 pytest==8.3.4
 pytest-asyncio==0.25.0
+pytest-cov==7.1.0
 httpx==0.28.1
 fakeredis==2.26.2

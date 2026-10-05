@@ -223,3 +223,22 @@ def test_paysim_benchmark_run_writes_benchmark_artifacts_and_leaves_live_model_a
     # The Lab's live model, metrics and frozen holdout are untouched by a benchmark run.
     assert open(settings.model_metrics_path, "rb").read() == live_before
     assert open(settings.holdout_path, "rb").read() == holdout_before
+
+
+def test_model_card_renders_with_and_without_a_benchmark(tmp_path, monkeypatch):
+    from app.ml.model_card import render
+    from app.ml.training import run_training
+
+    settings = get_settings()
+    for name in ("model_path", "model_metrics_path", "holdout_path", "train_pool_path"):
+        monkeypatch.setattr(settings, name, str(tmp_path / name))
+    live = run_training(fast=True, write_artifacts=False)
+
+    no_bench = render(live, None)
+    assert "**Not yet run.**" in no_bench and "not reportable" in no_bench
+    assert f"PR-AUC = {live['headline']['value']}" in no_bench
+    assert "## Limitations" in no_bench and "chronological" in no_bench
+
+    bench = dict(live, metric_source="paysim", reportable=True)
+    with_bench = render(live, bench)
+    assert "**Not yet run.**" not in with_bench and "reportable benchmark" in with_bench
