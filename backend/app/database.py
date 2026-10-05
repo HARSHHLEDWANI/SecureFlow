@@ -257,27 +257,31 @@ class ChainBlock(Base):
     previous_hash: Mapped[str] = mapped_column(String(80), nullable=False)
     nonce: Mapped[int] = mapped_column(Integer, default=0)
     hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    # Merkle root over ``transactions``; null for blocks sealed before it existed.
+    merkle_root: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 
 # Columns added after first release. ``create_all`` never alters an existing table, so on a
 # live database they would silently never appear. This idempotent guard adds them until
-# real migrations (Alembic) replace it.  (table, column, DDL type, default literal)
+# real migrations (Alembic) replace it.  (table, column, full column DDL per dialect)
 _ADDED_COLUMNS = [
-    ("transactions", "is_demo", "BOOLEAN", {"sqlite": "0", "postgresql": "FALSE"}),
+    ("transactions", "is_demo", {"sqlite": "BOOLEAN NOT NULL DEFAULT 0",
+                                 "postgresql": "BOOLEAN NOT NULL DEFAULT FALSE"}),
+    ("chain_blocks", "merkle_root", {"sqlite": "VARCHAR(80)", "postgresql": "VARCHAR(80)"}),
 ]
 
 
 def _ensure_columns() -> None:
     insp = inspect(engine)
     dialect = engine.dialect.name
-    for table, column, ddl, defaults in _ADDED_COLUMNS:
+    for table, column, ddl_by_dialect in _ADDED_COLUMNS:
         if not insp.has_table(table):
             continue
         if column in {c["name"] for c in insp.get_columns(table)}:
             continue
-        default = defaults.get(dialect, defaults.get("sqlite", "0"))
+        ddl = ddl_by_dialect.get(dialect, ddl_by_dialect["sqlite"])
         with engine.begin() as conn:
-            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl} NOT NULL DEFAULT {default}"))
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
 
 
 def init_db() -> None:

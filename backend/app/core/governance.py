@@ -22,7 +22,7 @@ from typing import Any, Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.blockchain import get_blockchain
+from app.core.audit_ledger import get_ledger
 from app.core.security import hash_password
 from app.database import (
     AuditLog,
@@ -168,7 +168,7 @@ def agreed_state_from_chain(txn_id: str) -> Optional[dict[str, Any]]:
     repair tampering.
     """
     latest: Optional[tuple[int, dict[str, Any]]] = None
-    for block in get_blockchain().chain:
+    for block in get_ledger().chain:
         for rec in block.transactions:
             if isinstance(rec, dict) and rec.get("transaction_id") == txn_id:
                 if latest is None or block.index >= latest[0]:
@@ -333,7 +333,7 @@ def _apply(db: Session, proposal: OverrideProposal, txn: Transaction) -> None:
     old_status = txn.status.value
     txn.status = proposal.proposed_status
 
-    block = get_blockchain().mine_block(
+    block = get_ledger().mine_block(
         {
             "kind": "GOVERNANCE_OVERRIDE",
             "proposal_id": proposal.id,
@@ -433,7 +433,7 @@ def rollback_from_chain(
     if agreed.get("risk_score") is not None:
         txn.risk_score = int(agreed["risk_score"])
 
-    block = get_blockchain().mine_block(
+    block = get_ledger().mine_block(
         {
             "kind": "GOVERNANCE_AUTOHEAL" if auto else "GOVERNANCE_ROLLBACK",
             "transaction_id": txn.id,

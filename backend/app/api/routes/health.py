@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from sqlalchemy import text
 
 from app import __version__
-from app.core.blockchain import get_blockchain
+from app.core.audit_ledger import get_ledger
 from app.core.redis_client import redis_client
 from app.database import engine
 from app.dependencies import envelope
@@ -34,6 +34,6 @@ def health() -> dict:
         "database": _db_ok(),
         "model_loaded": model.loaded,
         "model_version": model.version,
-        "blockchain_blocks": len(get_blockchain().chain),
+        "blockchain_blocks": len(get_ledger().chain),
     }
     return envelope(data)

@@ -7,12 +7,18 @@ SecureFlow backend (`backend/app/api/`). Grouped by router.
   The WebSocket is mounted at `/ws/alerts` (no version prefix).
 - **Response envelope**: every REST route returns
   `{ "success": bool, "data": <payload>, "error": string|null }` (see
-  `app/dependencies.py::envelope`). Errors raised via `HTTPException` return
-  FastAPI's `{ "detail": "..." }` with the appropriate status code.
+  `app/dependencies.py::envelope`). This now includes errors: `HTTPException`s return
+  `{ "success": false, "data": null, "error": "<message>" }` and 422 validation failures
+  return `error: "Validation failed - <field>: <msg>"` with per-field detail in
+  `data.errors`. Status codes are unchanged. (Clients that read `detail` must read
+  `error`; `frontend/src/lib/api.ts` reads `error` first.)
 - **Auth**: send `Authorization: Bearer <access_token>`. The token is issued by
   `/auth/login` (or `/auth/verify-step-up`) and resolved by
   `get_current_user` (`app/dependencies.py`). A refresh token is stored in an
-  httpOnly `sf_refresh` cookie.
+  httpOnly `sf_refresh` cookie; it is **single-use** - `/auth/refresh` rotates it, replaying
+  a rotated token revokes the whole login family, `/auth/logout` revokes it server-side,
+  and a token rotated within `REFRESH_REUSE_GRACE_SECONDS` answers `409` (retry once).
+  With Redis down no refresh token is issued or accepted.
 - **Auth levels used below**:
   - **none** — no authentication required
   - **auth** — any authenticated user (`get_current_user`)
@@ -153,7 +159,12 @@ All auth routes are rate-limited per-IP (`RateLimiter`, fail-open via Redis).
 
 ---
 
-## Blockchain explorer — `app/api/routes/blockchain.py`
+## Audit ledger explorer — `app/api/routes/blockchain.py`
+
+Mounted at `/audit-ledger/*`; `/blockchain/*` is a hidden alias serving identical responses.
+The ledger is a hash-linked, proof-of-work-sealed, append-only log with a Merkle root per
+block: **tamper-evident, not a distributed blockchain and not Byzantine fault tolerant**
+(`app/core/audit_ledger.py`). Paths below say `/blockchain` for historical reasons.
 
 All four routes are **staff**-gated (ANALYST/ADMIN) — they expose every user's
 audit data.
@@ -198,9 +209,15 @@ All three routes are **staff**-gated (aggregate views over all users).
 
 ## UPI Simulation Lab — `app/api/routes/upi.py`
 
-**Intentionally unauthenticated** — a one-click public demo surface that acts on
-the *seeded demo users*, never on real accounts. `/pay`, `/scenario`, and
-`/rapid-fire` are rate-limited.
+A one-click public demo surface that acts on the *seeded demo users*, never on real
+accounts. **Reads are public; every mutating route needs a demo session.**
+`POST /upi/session` returns `{ token, session_id, expires_in, max_transactions }`; send the
+token as `X-Demo-Session` on `/pay`, `/scenario/{id}`, `/rapid-fire` and `/reset` (401
+without it). Lab writes are limited to 20/min/IP (`/reset` 5/min, `/session` 10/min), each
+session may create `DEMO_SESSION_MAX_TRANSACTIONS` (100) transactions, and the database
+holds at most `DEMO_MAX_TOTAL_TRANSACTIONS` (5000) demo rows (429 beyond either). All Lab rows
+are flagged `is_demo`: analytics, recent-alerts and the staff transaction list exclude them
+unless `include_demo=true`, and `/reset` deletes only `is_demo` rows.
 
 ### `GET /api/v1/upi/users`
 - Demo user profiles with a live transaction count + last risk score.

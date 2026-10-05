@@ -19,7 +19,7 @@ from app import __version__
 from app.api.routes import analytics, auth, blockchain, governance, health, transaction, upi
 from app.api.websockets import alerts
 from app.config import get_settings
-from app.core.blockchain import get_blockchain
+from app.core.audit_ledger import get_ledger
 from app.database import init_db
 from app.dependencies import envelope
 from app.ml.model import get_model_service
@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI):
             "so governance has no main admin until one is assigned directly in the database."
         )
     init_db()
-    get_blockchain()  # ensure genesis block exists
+    get_ledger()  # ensure genesis block exists
     get_model_service()  # load model once
 
     # Seed UPI Lab demo users + history (idempotent; safe on every boot).
@@ -130,6 +130,8 @@ app.include_router(auth.router, prefix=API_PREFIX)
 app.include_router(transaction.router, prefix=API_PREFIX)
 app.include_router(transaction.risk_router, prefix=API_PREFIX)
 app.include_router(blockchain.router, prefix=API_PREFIX)
+app.include_router(blockchain.legacy_router, prefix=API_PREFIX)  # /blockchain alias
+app.include_router(blockchain.legacy_router, prefix=API_PREFIX)  # /blockchain alias
 app.include_router(analytics.router, prefix=API_PREFIX)
 app.include_router(upi.router, prefix=API_PREFIX)
 app.include_router(governance.router, prefix=API_PREFIX)

@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.websockets.alerts import dispatch_alert
-from app.core.blockchain import get_blockchain
+from app.core.audit_ledger import get_ledger
 from app.core.redis_client import redis_client
 from app.core.risk_engine import compute_risk
 from app.database import (
@@ -336,7 +336,7 @@ def run_pipeline(
     db.add(txn)
     db.flush()  # assign txn.id
 
-    block = get_blockchain().mine_block(
+    block = get_ledger().mine_block(
         {
             "transaction_id": txn.id,
             "from_vpa": txn.from_vpa,
