@@ -24,18 +24,18 @@ from typing import Any, Optional
 
 import joblib
 import numpy as np
-from sklearn.ensemble import IsolationForest, RandomForestClassifier
-from sklearn.model_selection import GridSearchCV, train_test_split
+import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import OverrideProposal, ProposalStatus, SessionLocal, Transaction, TxnStatus
-from app.ml.evaluation import compute_metrics, feature_importance
+from app.ml.bundle import build_bundle, evaluate_bundle
+from app.ml.evaluation import feature_importance
 from app.ml.features import FEATURE_COLUMNS, to_vector
 from app.ml.model import reload_model_service
-from app.ml.datasets.synthetic import SyntheticDataset
-from app.ml.training import _FAST_PARAMS
+from app.ml.thresholds import reset_threshold_cache
+from app.ml.training import file_digest
 from app.utils.helpers import utcnow
 from app.utils.logger import get_logger
 
@@ -116,13 +116,63 @@ def candidate_paths(version: int) -> tuple[str, str]:
     )
 
 
-def run_feedback_retrain(db: Session, fast: bool = False) -> dict[str, Any]:
-    """Retrain on synthetic data + weighted corrections; write a versioned candidate.
+def correction_weight(
+    n_corrections: int, n_pool: int, floor: float, target_share: float, cap: float
+) -> tuple[float, float]:
+    """Per-correction sample weight and the share of total sample mass it buys.
 
-    Real corrections are given more weight than synthetic examples via
-    ``sample_weight`` on ``fit`` (RandomForest supports it). Produces a new
-    ``fraud_model_v{n}.joblib`` + metrics json — it never overwrites the live
-    model. Returns the candidate metrics and the regression-guard verdict.
+    A weight of 5 against a pool of S rows is a rounding error in aggregate: with
+    S = 8,400 training rows and N = 1 correction, mass share = 5 / (8,400 + 5) = 0.06%.
+    (Measured here, a lone weight-5 correction still shifts a fully grown forest's
+    probability for that exact vector 0.995 -> 0.365, because ``min_samples_leaf=1``
+    lets one sample own a leaf - but only inside its own leaf neighbourhood, and the
+    effect on a near neighbour is similar; it is a local memorisation, not a learned
+    shift.) The weight is therefore raised so corrections hold at least
+    ``target_share`` of the effective mass::
+
+        w = target_share * S / (N * (1 - target_share))     # solves N*w/(S+N*w) = share
+        w = clamp(w, floor, cap)
+
+    e.g. S = 8,400, share = 5%: N = 1 -> w = 442; N = 20 -> w = 22; from N ~ 89 the
+    ``floor`` (5) already exceeds the target and applies unchanged. At w = 221 (what the
+    tests use, class-weighted) the same probe falls to 0.13 and its near neighbour to
+    0.26 - a markedly stronger pull. ``cap`` bounds the influence of a single, possibly
+    mistaken, human label.
+    """
+    if n_corrections <= 0:
+        return floor, 0.0
+    needed = target_share * n_pool / (n_corrections * (1.0 - target_share))
+    weight = float(min(max(floor, needed), cap))
+    share = n_corrections * weight / (n_pool + n_corrections * weight)
+    return weight, share
+
+
+def load_frozen_sets() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return ``(train_pool, holdout)`` frozen at training time; error if absent."""
+    settings = get_settings()
+    if not (os.path.exists(settings.train_pool_path) and os.path.exists(settings.holdout_path)):
+        raise FeedbackError(
+            "No frozen train pool / holdout found. Run `python -m app.ml.training` first: "
+            "retraining and the regression guard both score on those exact rows."
+        )
+    return pd.read_parquet(settings.train_pool_path), pd.read_parquet(settings.holdout_path)
+
+
+def holdout_hash() -> Optional[str]:
+    path = get_settings().holdout_path
+    return file_digest(path) if os.path.exists(path) else None
+
+
+def run_feedback_retrain(db: Session, fast: bool = False) -> dict[str, Any]:
+    """Retrain on the frozen pool + weighted corrections; write a versioned candidate.
+
+    The candidate trains only on the pool saved at training time (train + validation
+    splits) plus the corrections, and is scored on the **frozen holdout** - the same rows
+    the live model was scored on. (Previously this called ``generate_dataset()`` fresh on
+    every retrain with a module-level RNG that had already advanced, so the candidate's
+    and the live model's test sets were different random draws and the regression guard
+    compared noise.) Corrections get an adaptive weight (see :func:`correction_weight`).
+    Never overwrites the live model.
     """
     settings = get_settings()
     examples = collect_feedback_examples(db)
@@ -132,77 +182,48 @@ def run_feedback_retrain(db: Session, fast: bool = False) -> dict[str, Any]:
             f"with a feature snapshot; have {len(examples)}."
         )
 
-    # Synthetic base dataset.
-    df = SyntheticDataset().load()
-    X_syn = df[FEATURE_COLUMNS].to_numpy()
-    y_syn = df["is_fraud"].to_numpy()
+    pool, holdout = load_frozen_sets()
+    train = pool[pool["split"] == "train"].drop(columns="split")
+    val = pool[pool["split"] == "val"].drop(columns="split")
 
-    # Real corrections, ordered to the canonical feature vector.
-    X_corr = np.array([to_vector(ex["features"]) for ex in examples], dtype=float)
-    y_corr = np.array([ex["label"] for ex in examples], dtype=int)
+    # Real corrections: the exact vector the model scored, newest in time.
+    corr = pd.DataFrame(
+        [to_vector(ex["features"]) for ex in examples], columns=FEATURE_COLUMNS
+    ).astype("float32")
+    corr["is_fraud"] = np.array([ex["label"] for ex in examples], dtype=train["is_fraud"].dtype)
+    corr["time_step"] = int(train["time_step"].max()) + 1
+    train_all = pd.concat([train, corr[train.columns]], ignore_index=True)
 
-    X = np.vstack([X_syn, X_corr])
-    y = np.concatenate([y_syn, y_corr])
-    weights = np.concatenate(
-        [np.ones(len(y_syn)), np.full(len(y_corr), settings.feedback_correction_weight)]
+    weight, share = correction_weight(
+        len(examples), len(train), settings.feedback_correction_weight,
+        settings.feedback_correction_target_share, settings.feedback_max_correction_weight,
     )
-
-    X_tr, X_te, y_tr, y_te, w_tr, _ = train_test_split(
-        X, y, weights, test_size=0.2, random_state=42, stratify=y
-    )
-
-    if fast:
-        clf = RandomForestClassifier(
-            random_state=42, class_weight="balanced", n_jobs=-1, **_FAST_PARAMS
-        )
-        clf.fit(X_tr, y_tr, sample_weight=w_tr)
-        best_params = dict(_FAST_PARAMS)
-    else:
-        grid = GridSearchCV(
-            RandomForestClassifier(random_state=42, class_weight="balanced", n_jobs=-1),
-            param_grid={"n_estimators": [150, 250], "max_depth": [10, 16, None],
-                        "min_samples_leaf": [1, 3]},
-            scoring="f1", cv=5, n_jobs=-1,
-        )
-        grid.fit(X_tr, y_tr, sample_weight=w_tr)
-        clf = grid.best_estimator_
-        best_params = grid.best_params_
-
-    y_pred = clf.predict(X_te)
-    y_proba = clf.predict_proba(X_te)[:, 1]
-    metrics = compute_metrics(y_te, y_pred, y_proba)
-    importance = feature_importance(clf, FEATURE_COLUMNS)
-
-    iso = IsolationForest(
-        n_estimators=200, contamination=max(float(y_tr.mean()), 1e-3), random_state=42, n_jobs=-1
-    )
-    iso.fit(X_tr)
-    raw = -iso.decision_function(X_tr)
+    weights = np.concatenate([np.ones(len(train)), np.full(len(corr), weight)])
 
     version = _next_version(settings.feedback_model_dir)
     trained_at = datetime.now(timezone.utc).isoformat()
-    bundle = {
-        "model": clf,
-        "iso": iso,
-        "iso_score_min": float(raw.min()),
-        "iso_score_max": float(raw.max()),
-        "feature_columns": FEATURE_COLUMNS,
-        "best_params": best_params,
-        "version": f"feedback-v{version}",
-        "trained_at": trained_at,
-    }
+    bundle, report = build_bundle(
+        train_all, val, fast=fast, version=f"feedback-v{version}",
+        dataset="feedback", sample_weight=weights,
+    )
+    metrics = evaluate_bundle(bundle, holdout)
+
     model_path, metrics_path = candidate_paths(version)
     joblib.dump(bundle, model_path)
 
     metrics_out = {
         **metrics,
-        "feature_importance": importance,
-        "best_params": best_params,
-        "n_train": int(len(X_tr)),
-        "n_test": int(len(X_te)),
+        "calibration": report["calibration"],
+        "risk_thresholds": report["risk_thresholds"],
+        "feature_importance": feature_importance(bundle["base_model"], FEATURE_COLUMNS),
+        "best_params": report["best_params"],
+        "n_train": int(len(train_all)),
+        "n_test": int(len(holdout)),
         "n_corrections": len(examples),
-        "n_synthetic": int(len(y_syn)),
-        "correction_weight": settings.feedback_correction_weight,
+        "n_synthetic": int(len(train)),     # pool rows (kept under its old key for the API)
+        "correction_weight": weight,
+        "correction_mass_share": round(share, 4),
+        "holdout_hash": holdout_hash(),
         "trained_at": trained_at,
         "version": f"feedback-v{version}",
         "source": "feedback_retrain",
@@ -210,14 +231,17 @@ def run_feedback_retrain(db: Session, fast: bool = False) -> dict[str, Any]:
     with open(metrics_path, "w", encoding="utf-8") as fh:
         json.dump(metrics_out, fh, indent=2)
 
-    logger.info("Feedback retrain -> candidate v%d (%d corrections)", version, len(examples))
+    logger.info(
+        "Feedback retrain -> candidate v%d (%d corrections, weight %.1f = %.1f%% of mass)",
+        version, len(examples), weight, 100 * share,
+    )
     return {
         "version": version,
         "model_path": model_path,
         "metrics_path": metrics_path,
         "metrics": metrics_out,
         "n_corrections": len(examples),
-        "n_synthetic": int(len(y_syn)),
+        "n_synthetic": int(len(train)),
         "proposal_ids": [ex["proposal_id"] for ex in examples],
         "regression": evaluate_regression_guard(metrics_out),
     }
@@ -226,8 +250,7 @@ def run_feedback_retrain(db: Session, fast: bool = False) -> dict[str, Any]:
 # ── Regression guard ────────────────────────────────────────────────────────────
 
 
-def live_metrics() -> Optional[dict[str, Any]]:
-    path = get_settings().model_metrics_path
+def _read_json(path: str) -> Optional[dict[str, Any]]:
     if not os.path.exists(path):
         return None
     try:
@@ -237,17 +260,53 @@ def live_metrics() -> Optional[dict[str, Any]]:
         return None
 
 
+def live_metrics() -> Optional[dict[str, Any]]:
+    """Metrics of the live model **on the frozen holdout**.
+
+    The stored metrics file is trusted only if it was scored on the current holdout
+    (matching ``holdout_hash``); otherwise the live model is re-scored on the holdout
+    here, so the guard never compares models evaluated on different rows.
+    """
+    settings = get_settings()
+    stored = _read_json(settings.model_metrics_path)
+    current = holdout_hash()
+    if stored is None or current is None or stored.get("holdout_hash") == current:
+        return stored
+    try:
+        bundle = joblib.load(settings.model_path)
+        holdout = pd.read_parquet(settings.holdout_path)
+    except (OSError, ValueError, KeyError):
+        return stored
+    rescored = evaluate_bundle(bundle, holdout)
+    rescored.update(
+        holdout_hash=current, version=bundle.get("version"), rescored_on_holdout=True
+    )
+    return rescored
+
+
 def evaluate_regression_guard(candidate: dict[str, Any]) -> dict[str, Any]:
-    """Compare a candidate's AUC/recall to the live model; block on a big drop."""
+    """Compare a candidate to the live model on the same frozen holdout; block on a drop.
+
+    PR-AUC is the primary signal; AUC-ROC and recall are kept as secondary checks.
+    """
     settings = get_settings()
     live = live_metrics()
     if live is None:
-        return {"ok": True, "reasons": [], "auc_drop": 0.0, "recall_drop": 0.0,
-                "live": None, "candidate": _slim(candidate)}
+        return {"ok": True, "reasons": [], "pr_auc_drop": 0.0, "auc_drop": 0.0,
+                "recall_drop": 0.0, "same_holdout": None, "live": None,
+                "candidate": _slim(candidate)}
 
+    reasons: list[str] = []
+    cand_hash, live_hash = candidate.get("holdout_hash"), live.get("holdout_hash")
+    same_holdout = bool(cand_hash and cand_hash == live_hash)
+    if holdout_hash() is not None and not same_holdout:
+        reasons.append("candidate and live model were not scored on the same frozen holdout")
+
+    pr_drop = float(live.get("pr_auc", 0.0) or 0.0) - float(candidate.get("pr_auc", 0.0) or 0.0)
     auc_drop = float(live.get("auc_roc", 0.0)) - float(candidate.get("auc_roc", 0.0))
     recall_drop = float(live.get("recall", 0.0)) - float(candidate.get("recall", 0.0))
-    reasons: list[str] = []
+    if pr_drop > settings.feedback_regression_prauc_drop:
+        reasons.append(f"PR-AUC dropped {pr_drop:.3f} (> {settings.feedback_regression_prauc_drop})")
     if auc_drop > settings.feedback_regression_auc_drop:
         reasons.append(f"AUC-ROC dropped {auc_drop:.3f} (> {settings.feedback_regression_auc_drop})")
     if recall_drop > settings.feedback_regression_recall_drop:
@@ -255,8 +314,10 @@ def evaluate_regression_guard(candidate: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": not reasons,
         "reasons": reasons,
+        "pr_auc_drop": round(pr_drop, 4),
         "auc_drop": round(auc_drop, 4),
         "recall_drop": round(recall_drop, 4),
+        "same_holdout": same_holdout,
         "live": _slim(live),
         "candidate": _slim(candidate),
     }
@@ -265,7 +326,8 @@ def evaluate_regression_guard(candidate: dict[str, Any]) -> dict[str, Any]:
 def _slim(m: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
     if m is None:
         return None
-    return {k: m.get(k) for k in ("auc_roc", "recall", "precision", "f1", "accuracy", "version")}
+    return {k: m.get(k) for k in
+            ("pr_auc", "auc_roc", "recall", "precision", "f1", "accuracy", "version")}
 
 
 # ── Promotion (the only thing that makes a candidate live) ──────────────────────
@@ -296,6 +358,7 @@ def promote_candidate(db: Session, version: int, force: bool = False) -> dict[st
     shutil.copyfile(model_path, settings.model_path)
     shutil.copyfile(metrics_path, settings.model_metrics_path)
     reload_model_service()
+    reset_threshold_cache()
 
     consumed = 0
     for ex in collect_feedback_examples(db):
