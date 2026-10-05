@@ -34,7 +34,8 @@ from app.database import OverrideProposal, ProposalStatus, SessionLocal, Transac
 from app.ml.evaluation import compute_metrics, feature_importance
 from app.ml.features import FEATURE_COLUMNS, to_vector
 from app.ml.model import reload_model_service
-from app.ml.training import _FAST_PARAMS, generate_dataset
+from app.ml.datasets.synthetic import SyntheticDataset
+from app.ml.training import _FAST_PARAMS
 from app.utils.helpers import utcnow
 from app.utils.logger import get_logger
 
@@ -132,7 +133,7 @@ def run_feedback_retrain(db: Session, fast: bool = False) -> dict[str, Any]:
         )
 
     # Synthetic base dataset.
-    df = generate_dataset()
+    df = SyntheticDataset().load()
     X_syn = df[FEATURE_COLUMNS].to_numpy()
     y_syn = df["is_fraud"].to_numpy()
 

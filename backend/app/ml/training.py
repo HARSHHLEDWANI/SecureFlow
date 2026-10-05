@@ -26,122 +26,8 @@ from sklearn.model_selection import GridSearchCV, cross_val_score, train_test_sp
 
 from app.config import get_settings
 from app.ml.evaluation import compute_metrics, feature_importance
-from app.ml.features import FEATURE_COLUMNS, extract_features
-
-RNG = np.random.default_rng(42)
-
-# A handful of Indian city centroids for realistic geo signals.
-CITIES = {
-    "Mumbai": (19.0760, 72.8777),
-    "Delhi": (28.6139, 77.2090),
-    "Bengaluru": (12.9716, 77.5946),
-    "Kolkata": (22.5726, 88.3639),
-    "Chennai": (13.0827, 80.2707),
-    "Hyderabad": (17.3850, 78.4867),
-}
-CITY_NAMES = list(CITIES.keys())
-TXN_TYPES = ["P2P", "P2M", "BILL_PAY"]
-
-
-def _make_user_profiles(n_users: int) -> list[dict]:
-    profiles = []
-    for _ in range(n_users):
-        avg = float(np.clip(RNG.lognormal(mean=6.5, sigma=0.8), 50, 80_000))
-        city = CITY_NAMES[int(RNG.integers(0, len(CITY_NAMES)))]
-        profiles.append(
-            {
-                "avg_amount": avg,
-                "std_amount": avg * 0.4 + 50,
-                "home": CITIES[city],
-                "active_hours": sorted(RNG.choice(range(7, 23), size=8, replace=False).tolist()),
-            }
-        )
-    return profiles
-
-
-def _legit_signals(p: dict) -> dict:
-    amount = float(np.clip(RNG.normal(p["avg_amount"], p["std_amount"]), 1, 200_000))
-    hour = int(RNG.choice(p["active_hours"]))
-    return {
-        "amount_inr": amount,
-        "txn_type": str(RNG.choice(TXN_TYPES, p=[0.5, 0.4, 0.1])),
-        "hour": hour,
-        "is_weekend": int(RNG.random() < 0.28),
-        "velocity_1h": int(RNG.integers(0, 4)),
-        "velocity_24h": int(RNG.integers(1, 15)),
-        "geo_distance_km": float(abs(RNG.normal(3, 8))),
-        "minutes_since_last": float(np.clip(RNG.exponential(240), 2, 4320)),
-        "is_new_device": int(RNG.random() < 0.05),
-        "is_new_beneficiary": int(RNG.random() < 0.25),
-        "user_avg_amount": p["avg_amount"],
-        "user_std_amount": p["std_amount"],
-    }
-
-
-def _fraud_signals(p: dict) -> dict:
-    """One of four independent fraud archetypes."""
-    archetype = RNG.choice(["takeover", "scam", "travel", "micro"], p=[0.35, 0.3, 0.2, 0.15])
-    base = _legit_signals(p)
-
-    if archetype == "takeover":
-        base.update(
-            amount_inr=float(np.clip(RNG.normal(p["avg_amount"] * 6, p["avg_amount"]), 5_000, 500_000)),
-            hour=int(RNG.choice([0, 1, 2, 3, 4, 23])),
-            velocity_1h=int(RNG.integers(6, 16)),
-            velocity_24h=int(RNG.integers(10, 40)),
-            is_new_device=1,
-            is_new_beneficiary=1,
-            minutes_since_last=float(RNG.uniform(0.5, 8)),
-        )
-    elif archetype == "scam":
-        # Looks almost normal - victim authorises a payment to a fraudster.
-        base.update(
-            amount_inr=float(RNG.choice([10_000, 25_000, 49_999, 75_000, 99_999])),
-            txn_type=str(RNG.choice(["P2P", "P2M"])),
-            is_new_beneficiary=1,
-            is_new_device=int(RNG.random() < 0.2),
-        )
-    elif archetype == "travel":
-        base.update(
-            geo_distance_km=float(RNG.uniform(400, 2000)),
-            minutes_since_last=float(RNG.uniform(1, 30)),
-            is_new_device=int(RNG.random() < 0.6),
-        )
-    else:  # micro-testing
-        base.update(
-            amount_inr=float(RNG.uniform(1, 9)),
-            velocity_1h=int(RNG.integers(8, 25)),
-            velocity_24h=int(RNG.integers(20, 60)),
-            is_new_device=1,
-            is_new_beneficiary=1,
-            minutes_since_last=float(RNG.uniform(0.2, 3)),
-        )
-    return base
-
-
-def generate_dataset(n_rows: int = 12_000, fraud_rate: float = 0.13) -> pd.DataFrame:
-    """Generate a labelled synthetic UPI dataset as a feature DataFrame."""
-    profiles = _make_user_profiles(max(50, n_rows // 30))
-    rows: list[dict] = []
-    for _ in range(n_rows):
-        p = profiles[int(RNG.integers(0, len(profiles)))]
-        is_fraud = RNG.random() < fraud_rate
-        signals = _fraud_signals(p) if is_fraud else _legit_signals(p)
-
-        # Inject label noise so the problem isn't trivially separable: a small
-        # fraction of frauds look benign and vice-versa.
-        label = int(is_fraud)
-        if is_fraud and RNG.random() < 0.10:
-            signals = _legit_signals(p)  # stealthy fraud that looks normal
-        elif not is_fraud and RNG.random() < 0.04:
-            label = 0  # noisy-but-legit; keep label 0
-
-        features = extract_features(signals)
-        features["is_fraud"] = label
-        rows.append(features)
-
-    return pd.DataFrame(rows)
-
+from app.ml.datasets.synthetic import SyntheticDataset
+from app.ml.features import FEATURE_COLUMNS
 
 # Fixed hyperparameters used by the fast training path (skips grid search). These
 # are a strong, previously-observed configuration for this synthetic dataset — good
@@ -161,7 +47,7 @@ def run_training(fast: bool = False) -> dict:
     """
     settings = get_settings()
     print("Generating synthetic UPI dataset...")
-    df = generate_dataset()
+    df = SyntheticDataset().load()
     print(f"  rows={len(df)}  fraud={int(df['is_fraud'].sum())} "
           f"({100 * df['is_fraud'].mean():.1f}%)")
 

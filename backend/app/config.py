@@ -43,6 +43,22 @@ class Settings(BaseSettings):
     # ML
     model_path: str = "./data/fraud_model.joblib"
     model_metrics_path: str = "./data/model_metrics.json"
+    # Frozen evaluation/training pools written at training time. Every candidate and
+    # the live model are scored on the same ``holdout`` rows (see ml/feedback.py).
+    holdout_path: str = "./data/holdout.parquet"
+    train_pool_path: str = "./data/train_pool.parquet"
+    # PaySim benchmark CSV (never downloaded by the code - see ml/datasets/paysim.py).
+    paysim_path: str = ""
+    paysim_max_rows: int = 0            # 0 = all rows; N = first N rows in step order
+    # Training-set negative:positive cap. Only the TRAIN split is undersampled;
+    # validation/test keep the true base rate. Calibration is fitted on the untouched
+    # validation split, which corrects the probability shift this introduces.
+    train_negative_ratio: int = 50
+    # Cost matrix for threshold selection (ml/thresholds.py).
+    cost_false_positive: float = 1.0      # blocking a legitimate payment
+    cost_false_negative: float = 50.0     # allowing a fraudulent payment (1:50)
+    cost_stepup_legit: float = 0.1        # OTP friction on a legitimate payment
+    stepup_fraud_leak: float = 0.2        # share of step-up frauds that still get through
 
     # Blockchain
     blockchain_path: str = "./data/chain.json"
@@ -77,6 +93,11 @@ class Settings(BaseSettings):
     feedback_regression_auc_drop: float = 0.03        # block promotion if AUC drops beyond this
     feedback_regression_recall_drop: float = 0.05     # ...or recall drops beyond this
     feedback_retrain_fast: bool = False               # skip grid search on retrain (tests set True)
+    feedback_regression_prauc_drop: float = 0.03      # PR-AUC is the headline metric (AUC-ROC kept too)
+    # Corrections are floored to this share of total sample mass (see ml/feedback.py);
+    # ``feedback_correction_weight`` is the minimum per-correction weight.
+    feedback_correction_target_share: float = 0.05
+    feedback_max_correction_weight: float = 500.0
 
     @property
     def cors_origins_list(self) -> list[str]:
