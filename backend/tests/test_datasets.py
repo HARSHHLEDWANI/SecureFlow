@@ -99,3 +99,23 @@ def test_paysim_load_from_csv_respects_max_rows(tmp_path):
     with pytest.raises(ValueError):
         get_dataset("nope")
     assert np.isfinite(full[CANONICAL_COLUMNS].to_numpy(dtype=float)).all()
+
+
+def test_paysim_simulator_matches_schema_and_loads_through_the_adapter(tmp_path):
+    import importlib.util
+    import pathlib
+
+    path = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "simulate_paysim.py"
+    spec = importlib.util.spec_from_file_location("simulate_paysim", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    df = mod.simulate(40_000, fraud_rate=0.01, seed=1)
+    assert list(df.columns) == ["step", "type", "amount", "nameOrig", "nameDest", "isFraud"]
+    assert df["step"].is_monotonic_increasing and df["step"].between(1, 743).all()
+    assert df.loc[df["isFraud"] == 1, "type"].isin(["TRANSFER", "CASH_OUT"]).all()
+    assert df["nameOrig"].nunique() > 0.95 * len(df)  # origins almost all unique, like PaySim
+    csv = tmp_path / "sim.csv"
+    df.to_csv(csv, index=False)
+    out = PaySimDataset(path=str(csv), max_rows=0).load()
+    assert list(out.columns) == CANONICAL_COLUMNS and out["is_fraud"].sum() == df["isFraud"].sum()
