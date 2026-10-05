@@ -28,9 +28,10 @@ def test_health_reports_subsystems(client):
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
 
-def test_register_first_user_is_admin(client):
+def test_register_first_user_is_no_longer_admin(client):
+    """Superseded 'first registrant becomes ADMIN' (a takeover on a public URL)."""
     _, data = _register_and_login(client)
-    assert data["user"]["role"] == "ADMIN"
+    assert data["user"]["role"] == "VIEWER"
 
 
 def test_register_rejects_duplicate_email(client):

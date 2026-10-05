@@ -1,4 +1,5 @@
 """Shared FastAPI dependencies: auth, rate limiting, response envelope."""
+import ipaddress
 from typing import Any, Optional
 
 import jwt
@@ -77,6 +78,36 @@ def require_staff(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def client_ip(request: Request) -> str:
+    """The caller's address for rate-limit keying, safe behind a reverse proxy.
+
+    Behind Render's edge ``request.client.host`` is the proxy for every user, so one noisy
+    client would 429 everyone. When (and only when) the socket peer is inside
+    ``TRUSTED_PROXIES``, the real client is recovered from ``X-Forwarded-For``. The chain
+    is walked right-to-left skipping trusted proxies and the first untrusted hop is used:
+    that equals the first hop in the honest case but cannot be forged by a client who
+    prepends fake hops. Anything malformed, or any untrusted peer, falls back to the peer.
+    """
+    peer = request.client.host if request.client else "unknown"
+    nets = settings.trusted_proxy_networks
+    if not nets:
+        return peer
+
+    def trusted(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+        return any(addr in n for n in nets)
+
+    try:
+        if not trusted(ipaddress.ip_address(peer)):
+            return peer
+        hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+        for hop in reversed(hops):
+            if not trusted(ipaddress.ip_address(hop)):
+                return hop
+    except ValueError:
+        return peer
+    return hops[0] if hops else peer
+
+
 class RateLimiter:
     """Per-IP, per-endpoint fixed-window rate limiter (fail-open via Redis).
 
@@ -90,8 +121,7 @@ class RateLimiter:
         self.limit = limit
 
     def __call__(self, request: Request) -> None:
-        client_ip = request.client.host if request.client else "unknown"
-        key = f"ratelimit:{client_ip}:{self.endpoint}"
+        key = f"ratelimit:{client_ip(request)}:{self.endpoint}"
         max_requests = self.limit if self.limit is not None else settings.rate_limit_requests
         count = redis_client.rate_limit_hit(key, settings.rate_limit_window_seconds)
         if count > max_requests:

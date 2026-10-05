@@ -2,21 +2,35 @@
 
 Login is itself risk-scored: a LOW-risk attempt logs in directly, a MEDIUM-risk
 attempt must clear a step-up OTP challenge, and a HIGH-risk attempt is blocked.
+
+Security properties (see ``tests/test_security.py``):
+
+* The login risk check fails *closed*: if neither Redis nor the database can say the
+  device is known, the login is forced to step-up instead of silently scoring LOW.
+* Only ``BOOTSTRAP_ADMIN_EMAIL`` is promoted to ADMIN on registration.
+* The step-up OTP is only ever returned in the response outside production.
+* Refresh tokens rotate on every use; reuse of a rotated token revokes the whole
+  login family; logout revokes it (``app/core/refresh_tokens.py``).
+* Failed logins are throttled per account as well as per IP.
 """
 from __future__ import annotations
 
+import hashlib
 import secrets
 import uuid
+from typing import Optional
 
 import jwt
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.core import refresh_tokens as rt
 from app.core.redis_client import redis_client
 from app.core.security import create_token, decode_token, hash_password, verify_password
-from app.database import Role, User, get_db
+from app.database import Role, Transaction, User, get_db
 from app.dependencies import RateLimiter, envelope, get_current_user
 from app.models.user import (
     LoginRequest,
@@ -45,12 +59,35 @@ def _public(user: User) -> UserPublic:
     )
 
 
-def _assess_login_risk(user: User, device_id: str) -> tuple[int, str]:
-    """Lightweight risk score (0–100) for a login attempt."""
-    score = 0
+def _device_known(db: Session, user: User, device_id: str) -> Optional[bool]:
+    """Is ``device_id`` a recognised device for ``user``?
+
+    Redis first; if it cannot answer (``None``), fall back to the database - the same
+    transaction-history check ``gather_signals`` uses. ``None`` only if *both* are down.
+    """
     known = redis_client.is_known_device(user.id, device_id)
-    if known is False:
-        score += 45  # unrecognised device
+    if known is not None:
+        return known
+    try:
+        seen = db.scalar(
+            select(func.count())
+            .select_from(Transaction)
+            .where(Transaction.user_id == user.id, Transaction.device_id == device_id)
+        )
+    except SQLAlchemyError:
+        return None
+    return (seen or 0) > 0
+
+
+def _assess_login_risk(user: User, device_id: str, db: Session) -> tuple[int, str]:
+    """Lightweight risk score (0-100) for a login attempt.
+
+    An unrecognised device adds 45 (-> MEDIUM, step-up). An *unverifiable* device
+    (Redis and DB both unavailable) is treated the same way: never trusted by default.
+    """
+    score = 0
+    if _device_known(db, user, device_id) is not True:
+        score += 45  # unrecognised, or unverifiable, device
     hour = utcnow().hour
     if hour < 6 or hour >= 23:
         score += 20  # unusual hour
@@ -66,49 +103,56 @@ def _assess_login_risk(user: User, device_id: str) -> tuple[int, str]:
     return min(score, 100), tier
 
 
-def _issue_tokens(response: Response, user: User) -> str:
+def _issue_tokens(response: Response, user: User, family: Optional[str] = None) -> str:
+    """Return an access token and set a rotating refresh cookie when it is verifiable.
+
+    With Redis down the refresh token cannot be tracked, so none is issued: the session
+    lasts only as long as the (short) access token.
+    """
     access = create_token(user.id, "access", role=user.role.value, email=user.email)
-    refresh = create_token(user.id, "refresh")
-    response.set_cookie(
-        REFRESH_COOKIE,
-        refresh,
-        httponly=True,
-        samesite="lax",
-        secure=settings.is_production,
-        max_age=settings.refresh_token_expire_days * 86400,
-    )
+    fid, jti = family or rt.new_family(), rt.new_jti()
+    if rt.register(jti, fid, user.id):
+        refresh = create_token(user.id, "refresh", jti=jti, fid=fid)
+        response.set_cookie(
+            REFRESH_COOKIE,
+            refresh,
+            httponly=True,
+            samesite="lax",
+            secure=settings.is_production,
+            max_age=settings.refresh_token_expire_days * 86400,
+        )
+    else:
+        logger.warning("Refresh store unavailable - issuing access token only for %s", user.email)
+        response.delete_cookie(REFRESH_COOKIE)
     return access
+
+
+def _account_key(email: str) -> str:
+    digest = hashlib.sha256(email.strip().lower().encode()).hexdigest()[:32]
+    return f"ratelimit:acct:{digest}:login"
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(RateLimiter("register"))])
 def register(req: RegisterRequest, db: Session = Depends(get_db)) -> dict:
-    """Create a new user. The first registered user becomes ADMIN."""
+    """Create a new user.
+
+    Everyone registers as VIEWER except ``BOOTSTRAP_ADMIN_EMAIL``, which is promoted to
+    ADMIN. There is no "first user wins": on a public URL that would hand the
+    governance console to whoever arrives first.
+    """
     exists = db.scalar(select(func.count()).select_from(User).where(User.email == req.email))
     if exists:
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
 
-    # Seeded system accounts (lab demo users @secureflow.local + the governance
-    # council @secureflow.io) are excluded so the first *real* registrant still
-    # becomes ADMIN on a fresh deployment.
-    real_users = (
-        db.scalar(
-            select(func.count())
-            .select_from(User)
-            .where(
-                ~User.email.like("%@secureflow.local"),
-                ~User.email.like("%@secureflow.io"),
-            )
-        )
-        or 0
-    )
-    is_first = real_users == 0
+    bootstrap = settings.bootstrap_admin_email.strip().lower()
+    is_bootstrap = bool(bootstrap) and req.email.strip().lower() == bootstrap
     user = User(
         email=req.email,
         password_hash=hash_password(req.password),
         vpa=req.vpa,
         home_city=req.home_city,
-        role=Role.ADMIN if is_first else Role.VIEWER,
+        role=Role.ADMIN if is_bootstrap else Role.VIEWER,
     )
     db.add(user)
     db.commit()
@@ -120,11 +164,20 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)) -> dict:
 @router.post("/login", dependencies=[Depends(RateLimiter("login"))])
 def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)) -> dict:
     """Authenticate, returning a token or a step-up challenge by risk tier."""
+    acct_key = _account_key(req.email)
+    if redis_client.counter_get(acct_key) >= settings.login_account_limit:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Too many failed logins for this account. Try again later.",
+        )
+
     user = db.execute(select(User).where(User.email == req.email)).scalar_one_or_none()
     if user is None or not verify_password(req.password, user.password_hash):
+        redis_client.rate_limit_hit(acct_key, settings.login_account_window_seconds)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+    redis_client.key_delete(acct_key)
 
-    score, tier = _assess_login_risk(user, req.device_id)
+    score, tier = _assess_login_risk(user, req.device_id, db)
 
     if tier == "HIGH":
         logger.warning("Blocked HIGH-risk login for %s", user.email)
@@ -141,6 +194,10 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)) 
             {"user_id": user.id, "otp": otp, "device_id": req.device_id},
             ttl=300,
         )
+        if settings.is_production:
+            # Delivered out-of-band (SMS/app) in a real deployment; here it is logged so
+            # an operator can complete the challenge. Never returned to the caller.
+            logger.info("Step-up OTP for %s challenge=%s otp=%s", user.email, challenge_id, otp)
         return envelope(
             LoginResponse(
                 user=_public(user),
@@ -148,11 +205,11 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)) 
                 login_risk_tier=tier,
                 step_up_required=True,
                 challenge_id=challenge_id,
-                demo_otp=otp,
+                demo_otp=None if settings.is_production else otp,
             ).model_dump()
         )
 
-    # LOW risk — log in directly.
+    # LOW risk - log in directly.
     access = _issue_tokens(response, user)
     redis_client.add_device(user.id, req.device_id)
     return envelope(
@@ -199,7 +256,11 @@ def refresh(
     db: Session = Depends(get_db),
     sf_refresh: str | None = Cookie(default=None),
 ) -> dict:
-    """Rotate the access token using the httpOnly refresh cookie."""
+    """Rotate the refresh token and issue a new access token.
+
+    The presented token is single-use. Presenting one that was already rotated is
+    treated as theft: the whole login family is revoked.
+    """
     if not sf_refresh:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing refresh token")
     try:
@@ -207,11 +268,26 @@ def refresh(
     except jwt.PyJWTError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
 
+    ident = rt.identity_from_payload(payload)
+    if ident is None:  # pre-rotation token (no jti/fid): cannot be tracked, so reject
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
+
+    state = rt.check(ident.jti, ident.fid)
+    if state is rt.RefreshState.REUSED:
+        rt.revoke_family(ident.fid)
+        response.delete_cookie(REFRESH_COOKIE)
+        logger.warning("Refresh-token reuse detected for user %s - family revoked", payload.get("sub"))
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token reuse detected; log in again")
+    if state is not rt.RefreshState.ACTIVE:
+        response.delete_cookie(REFRESH_COOKIE)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token is not valid; log in again")
+
     user = db.get(User, payload.get("sub"))
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User no longer exists")
 
-    access = _issue_tokens(response, user)
+    rt.retire(ident.jti, ident.fid)
+    access = _issue_tokens(response, user, family=ident.fid)
     return envelope({"accessToken": access})
 
 
@@ -226,7 +302,14 @@ def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)) ->
 
 
 @router.post("/logout")
-def logout(response: Response) -> dict:
-    """Clear the refresh cookie."""
+def logout(response: Response, sf_refresh: str | None = Cookie(default=None)) -> dict:
+    """Revoke the refresh-token family server-side and clear the cookie."""
+    if sf_refresh:
+        try:
+            ident = rt.identity_from_payload(decode_token(sf_refresh, "refresh"))
+        except jwt.PyJWTError:
+            ident = None
+        if ident is not None:
+            rt.revoke_family(ident.fid)
     response.delete_cookie(REFRESH_COOKIE)
     return envelope({"loggedOut": True})

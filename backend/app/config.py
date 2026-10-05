@@ -82,6 +82,27 @@ class Settings(BaseSettings):
     # Rate limiting
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
+    # Comma-separated CIDRs of reverse proxies whose X-Forwarded-For is trusted
+    # (e.g. Render's edge). Empty = never trust the header; key on the socket peer.
+    trusted_proxies: str = ""
+    # Credential-stuffing guard: failed logins allowed per account per window,
+    # independent of the source IP.
+    login_account_limit: int = 10
+    login_account_window_seconds: int = 900
+
+    # Bootstrap admin: the ONLY email promoted to ADMIN on registration. Everyone
+    # else registers as VIEWER. Unset in production => nobody is auto-promoted.
+    bootstrap_admin_email: str = ""
+
+    # UPI Lab (public demo surface): session-gated, tightly limited, flagged is_demo.
+    demo_session_ttl_minutes: int = 30
+    demo_session_max_transactions: int = 100     # per session
+    demo_max_total_transactions: int = 5000      # global cap on is_demo rows
+    demo_rate_limit_requests: int = 20           # per IP per window on Lab writes
+    demo_session_rate_limit: int = 10            # session issuance per IP per window
+
+    # Audit ledger sealing. Proof-of-work is a cost-of-rewrite speed bump, not consensus.
+    ledger_pow_enabled: bool = True
 
     # Governance integrity watchdog (auto-detect + self-heal tampering)
     integrity_watchdog_enabled: bool = True
@@ -109,6 +130,22 @@ class Settings(BaseSettings):
     # ``feedback_correction_weight`` is the minimum per-correction weight.
     feedback_correction_target_share: float = 0.05
     feedback_max_correction_weight: float = 500.0
+
+    @property
+    def trusted_proxy_networks(self) -> list:
+        """Parsed ``trusted_proxies`` CIDRs (invalid entries are ignored)."""
+        import ipaddress
+
+        nets = []
+        for part in self.trusted_proxies.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                nets.append(ipaddress.ip_network(part, strict=False))
+            except ValueError:
+                continue
+        return nets
 
     @property
     def cors_origins_list(self) -> list[str]:

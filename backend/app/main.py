@@ -10,8 +10,10 @@ import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import __version__
 from app.api.routes import analytics, auth, blockchain, governance, health, transaction, upi
@@ -33,6 +35,11 @@ API_PREFIX = "/api/v1"
 async def lifespan(app: FastAPI):
     """Initialise subsystems on startup, clean up on shutdown."""
     logger.info("Starting %s v%s (%s)", settings.app_name, __version__, settings.environment)
+    if settings.is_production and not settings.bootstrap_admin_email.strip():
+        logger.warning(
+            "BOOTSTRAP_ADMIN_EMAIL is not set: no account will be auto-promoted to ADMIN, "
+            "so governance has no main admin until one is assigned directly in the database."
+        )
     init_db()
     get_blockchain()  # ensure genesis block exists
     get_model_service()  # load model once
@@ -80,6 +87,34 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Wrap every HTTPException in the ``{success, data, error}`` envelope.
+
+    Status codes and headers are unchanged; only the body shape (previously
+    ``{"detail": ...}``) now matches every other response.
+    """
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=envelope(error=str(exc.detail)),
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """422 validation failures in the envelope too, with per-field detail in ``data``."""
+    errors = [
+        {"field": ".".join(str(p) for p in e.get("loc", ()) if p != "body"), "message": e.get("msg", "")}
+        for e in exc.errors()
+    ]
+    first = errors[0] if errors else {"field": "", "message": "invalid request"}
+    summary = f"{first['field']}: {first['message']}" if first["field"] else first["message"]
+    return JSONResponse(
+        status_code=422, content={**envelope(error=f"Validation failed - {summary}"), "data": {"errors": errors}}
+    )
 
 
 @app.exception_handler(Exception)

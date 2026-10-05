@@ -106,6 +106,26 @@ class RedisClient:
 
         return self._safe(_do, default=0)
 
+    def counter_get(self, key: str) -> int:
+        """Current value of a counter (0 if absent or Redis is unavailable)."""
+        raw = self._safe(lambda c: c.get(key))
+        try:
+            return int(raw) if raw is not None else 0
+        except (TypeError, ValueError):
+            return 0
+
+    # ── Plain keys with an explicit success signal (token stores) ────────────
+
+    def key_set(self, key: str, value: str, ttl: int) -> bool:
+        """Store ``value`` for ``ttl`` seconds. False if Redis is unavailable."""
+        return bool(self._safe(lambda c: c.setex(key, ttl, value), default=False))
+
+    def key_get(self, key: str) -> Optional[str]:
+        return self._safe(lambda c: c.get(key))
+
+    def key_delete(self, key: str) -> None:
+        self._safe(lambda c: c.delete(key))
+
     # ── Velocity (sorted set of event timestamps) ────────────────────────────
 
     def record_velocity(self, user_id: str, retention_seconds: int = 3600) -> None:
