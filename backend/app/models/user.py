@@ -1,7 +1,12 @@
 """User / authentication schemas."""
 from __future__ import annotations
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+
+def _lower_email(v: str) -> str:
+    """Emails are case-insensitive identities: normalise so ``Admin@x.com`` == ``admin@x.com``."""
+    return v.strip().lower()
 
 
 class RegisterRequest(BaseModel):
@@ -10,11 +15,15 @@ class RegisterRequest(BaseModel):
     vpa: str = Field(..., pattern=r"^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$")
     home_city: str = Field(default="Mumbai", max_length=120)
 
+    _normalise_email = field_validator("email")(_lower_email)
+
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=1, max_length=128)
     device_id: str = Field(default="web-default", max_length=120)
+
+    _normalise_email = field_validator("email")(_lower_email)
 
 
 class StepUpRequest(BaseModel):

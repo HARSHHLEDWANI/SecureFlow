@@ -131,6 +131,11 @@ def model_metrics(user: User = Depends(require_staff)) -> dict:
         return envelope(None, error="Model metrics not available — train the model first.")
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            return envelope(json.load(fh))
+            metrics = json.load(fh)
+        # The full cost sweeps (thousands of rows) stay in the file; the UI does not need them.
+        metrics.pop("threshold_sweep", None)
+        if isinstance(metrics.get("operating_threshold"), dict):
+            metrics["operating_threshold"].pop("sweep", None)
+        return envelope(metrics)
     except (OSError, json.JSONDecodeError):
         return envelope(None, error="Could not read model metrics file.")

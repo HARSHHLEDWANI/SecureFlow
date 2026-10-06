@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     jwt_refresh_secret: str = "change_me_too_in_production"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
+    # SameSite of the refresh cookie. "lax" suits a same-site deployment; a frontend on a
+    # different site than the API (e.g. Vercel + Render) needs "none" (which forces Secure).
+    refresh_cookie_samesite: str = "lax"
+    # OTP guesses allowed per step-up challenge before it is destroyed.
+    stepup_max_attempts: int = 5
     # A just-rotated refresh token presented again within this window (two tabs or two
     # in-flight requests racing) is answered 409 "retry" instead of being treated as theft.
     refresh_reuse_grace_seconds: int = 10
@@ -154,6 +159,18 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> list[str]:
         """CORS origins parsed from the comma-separated configuration string."""
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    def insecure_production_settings(self) -> list[str]:
+        """Problems that must stop a production boot (empty list = fine)."""
+        problems = []
+        defaults = {"change_me_in_production", "change_me_too_in_production"}
+        for name in ("jwt_secret", "jwt_refresh_secret"):
+            value = getattr(self, name)
+            if value in defaults or len(value) < 32:
+                problems.append(f"{name.upper()} is a default or shorter than 32 characters")
+        if self.jwt_secret == self.jwt_refresh_secret:
+            problems.append("JWT_SECRET and JWT_REFRESH_SECRET must differ")
+        return problems
 
     @property
     def is_production(self) -> bool:

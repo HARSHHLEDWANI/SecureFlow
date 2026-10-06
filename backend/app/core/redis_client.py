@@ -8,6 +8,7 @@ rate-limit, velocity, geo, device, session, queue, and pub/sub.
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from typing import Any, Optional
@@ -26,13 +27,68 @@ ALERTS_CHANNEL = "fraud:alerts"
 QUEUE_KEY = "transaction:queue"
 
 
+class _LocalStore:
+    """Process-local, TTL'd, size-bounded stand-in used ONLY while Redis is unavailable.
+
+    Security controls (rate limits, the account login throttle, step-up challenges) must not
+    silently switch off with Redis, so they degrade to per-process state instead: weaker (not
+    shared across workers, lost on restart) but still enforced.
+    """
+
+    MAX_KEYS = 20_000
+
+    def __init__(self) -> None:
+        self._data: dict[str, tuple[Any, float]] = {}
+        self._lock = threading.Lock()
+
+    def _purge(self, now: float) -> None:
+        if len(self._data) >= self.MAX_KEYS:
+            self._data = {k: v for k, v in self._data.items() if v[1] > now}
+            if len(self._data) >= self.MAX_KEYS:  # still full of live keys: drop the oldest half
+                keep = sorted(self._data.items(), key=lambda kv: kv[1][1])[len(self._data) // 2:]
+                self._data = dict(keep)
+
+    def incr(self, key: str, window: int, amount: int = 1) -> int:
+        now = time.monotonic()
+        with self._lock:
+            value, expires = self._data.get(key, (0, 0.0))
+            if expires <= now:
+                self._purge(now)
+                value, expires = 0, now + window
+            value += amount
+            self._data[key] = (value, expires)
+            return value
+
+    def get(self, key: str) -> Any:
+        now = time.monotonic()
+        with self._lock:
+            value, expires = self._data.get(key, (None, 0.0))
+            return value if expires > now else None
+
+    def set(self, key: str, value: Any, ttl: int) -> None:
+        now = time.monotonic()
+        with self._lock:
+            self._purge(now)
+            self._data[key] = (value, now + ttl)
+
+    def delete(self, key: str) -> None:
+        with self._lock:
+            self._data.pop(key, None)
+
+
 class RedisClient:
-    """Thin, fail-open wrapper around a pooled synchronous Redis connection."""
+    """Thin wrapper around a pooled synchronous Redis connection.
+
+    Cache paths fail open (neutral default, recompute from the DB). Security-sensitive state
+    - rate-limit counters, the login throttle, step-up challenges - falls back to a
+    process-local store instead, so an outage degrades protection rather than removing it.
+    """
 
     def __init__(self, url: str) -> None:
         self._url = url
         self._client: Optional[redis.Redis] = None
         self._warned = False
+        self._local = _LocalStore()
         self._connect()
 
     def _connect(self) -> None:
@@ -95,7 +151,8 @@ class RedisClient:
     def rate_limit_hit(self, key: str, window_seconds: int) -> int:
         """Increment a fixed-window counter, returning the new count.
 
-        Returns 0 when Redis is unavailable so the caller fails open (allows).
+        With Redis unavailable the count is kept in-process (per worker) rather than
+        returning 0, so rate limits keep working, just not across workers.
         """
 
         def _do(c: redis.Redis) -> int:
@@ -104,11 +161,14 @@ class RedisClient:
                 c.expire(key, window_seconds)
             return int(count)
 
-        return self._safe(_do, default=0)
+        result = self._safe(_do, default=None)
+        return result if result is not None else self._local.incr(key, window_seconds)
 
     def counter_get(self, key: str) -> int:
-        """Current value of a counter (0 if absent or Redis is unavailable)."""
-        raw = self._safe(lambda c: c.get(key))
+        """Current value of a counter (0 if absent), from Redis or the local fallback."""
+        if self._client is None:
+            return int(self._local.get(key) or 0)
+        raw = self._safe(lambda c: c.get(key), default=self._local.get(key))
         try:
             return int(raw) if raw is not None else 0
         except (TypeError, ValueError):
@@ -135,6 +195,7 @@ class RedisClient:
         return self._safe(lambda c: c.get(key))
 
     def key_delete(self, key: str) -> None:
+        self._local.delete(key)
         self._safe(lambda c: c.delete(key))
 
     # ── Velocity (sorted set of event timestamps) ────────────────────────────
@@ -194,10 +255,15 @@ class RedisClient:
     # ── Sessions ─────────────────────────────────────────────────────────────
 
     def set_session(self, token: str, data: dict, ttl: int = 1800) -> None:
-        self._safe(lambda c: c.setex(f"session:{token}", ttl, json.dumps(data)))
+        """Store a session/challenge. Falls back to process memory if Redis is unavailable."""
+        ok = self._safe(lambda c: bool(c.setex(f"session:{token}", ttl, json.dumps(data))), default=False)
+        if not ok:
+            self._local.set(f"session:{token}", json.dumps(data), ttl)
 
     def get_session(self, token: str) -> Optional[dict]:
         raw = self._safe(lambda c: c.get(f"session:{token}"))
+        if raw is None:
+            raw = self._local.get(f"session:{token}")
         if raw is None:
             return None
         try:
@@ -206,6 +272,7 @@ class RedisClient:
             return None
 
     def delete_session(self, token: str) -> None:
+        self._local.delete(f"session:{token}")
         self._safe(lambda c: c.delete(f"session:{token}"))
 
     # ── Queue ────────────────────────────────────────────────────────────────

@@ -98,7 +98,7 @@ def tier_cost(
     """Expected total cost of one ``(low, medium)`` pair, from per-score histograms."""
     l_cum = np.cumsum(legit_hist)
     f_cum = np.cumsum(fraud_hist)
-    legit_allowed, fraud_allowed = l_cum[low], f_cum[low]
+    fraud_allowed = f_cum[low]  # legit allowed costs nothing
     legit_step = l_cum[medium] - l_cum[low]
     fraud_step = f_cum[medium] - f_cum[low]
     legit_block = l_cum[-1] - l_cum[medium]

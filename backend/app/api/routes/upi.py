@@ -21,7 +21,7 @@ from app.core.demo_seed import demo_user_id, reset_demo
 from app.core.demo_session import enforce_quota, issue_session, require_demo_session
 from app.core.redis_client import redis_client
 from app.core.upi_simulator import UPIValidationError, scenarios_public, simulator
-from app.database import Transaction, User, get_db
+from app.database import Transaction, get_db
 from app.dependencies import RateLimiter, envelope
 from app.models.upi import UPIPayRequest, UPIPayResult
 from app.utils.logger import get_logger

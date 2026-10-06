@@ -254,7 +254,10 @@ def gather_signals(
 
 def predict_cached(signals: dict[str, Any]) -> dict[str, Any]:
     """ML prediction with the same Redis cache the analyze route uses."""
-    cache_key = f"prediction:{stable_hash(signals)}"
+    # The model version is part of the key: after a promotion, entries cached from the old
+    # model must not be served for up to the 10-minute TTL.
+    version = get_model_service().version or "heuristic"
+    cache_key = f"prediction:{version}:{stable_hash(signals)}"
     ml_result = redis_client.cache_get_json(cache_key)
     if ml_result is None:
         ml_result = get_model_service().predict(signals)

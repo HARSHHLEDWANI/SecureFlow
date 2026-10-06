@@ -22,7 +22,6 @@ from app.core.demo_data import (
 from app.core.demo_seed import demo_user_id, reset_sender_baseline
 from app.core.pipeline import StageTracker, gather_signals, recommended_action, run_pipeline
 from app.database import TxnStatus, User
-from app.utils.helpers import utcnow
 from app.utils.logger import get_logger
 
 logger = get_logger("upi_sim")

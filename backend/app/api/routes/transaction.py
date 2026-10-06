@@ -11,7 +11,6 @@ from app.core.pipeline import (
     compute_risk_profile,
     gather_signals,
     recommended_action,
-    refresh_risk_cache,
     run_pipeline,
 )
 from app.config import get_settings

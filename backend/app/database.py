@@ -20,7 +20,6 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
-    Text,
     UniqueConstraint,
     create_engine,
     inspect,

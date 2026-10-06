@@ -261,25 +261,36 @@ class AuditLedger:
     def mine_block(self, transaction: Optional[dict[str, Any]] = None) -> Block:
         """Seal pending records (plus an optional one) into a new block."""
         with self._lock:
+            had_pending = len(self.pending)
             if transaction is not None:
                 self.pending.append(transaction)
             if not self.pending:
                 self.pending.append({"note": "empty block"})
             records = list(self.pending)
 
-            if self.storage == "db":
-                block = self._mine_block_db(records)
-            else:
-                block = Block(
-                    index=self.last_block.index + 1,
-                    timestamp=time.time(),
-                    transactions=records,
-                    previous_hash=self.last_block.hash,
-                    merkle_root=merkle_root(records),
-                )
-                block.hash = self._mine(block)
-                self.chain.append(block)
-                self._persist_to_file()
+            try:
+                if self.storage == "db":
+                    block = self._mine_block_db(records)
+                else:
+                    block = Block(
+                        index=self.last_block.index + 1,
+                        timestamp=time.time(),
+                        transactions=records,
+                        previous_hash=self.last_block.hash,
+                        merkle_root=merkle_root(records),
+                    )
+                    block.hash = self._mine(block)
+                    self.chain.append(block)
+                    try:
+                        self._persist_to_file()
+                    except Exception:
+                        self.chain.pop()  # memory must not run ahead of what is on disk
+                        raise
+            except Exception:
+                # Do not leave this call's record stranded in ``pending``: it would be
+                # silently sealed into some later, unrelated block.
+                del self.pending[had_pending:]
+                raise
             self.pending = []
             logger.info("Sealed block #%d (hash %s...)", block.index, block.hash[:12])
             return block
@@ -317,7 +328,7 @@ class AuditLedger:
                 self.chain.append(block)
                 return block
             except IntegrityError:
-                logger.info("Lost the race for block #%d (attempt %d) - reloading tip", prev.index + 1, attempt)
+                logger.info("Lost the race for block #%d (attempt %d) - reloading tip", block.index, attempt)
                 continue
             finally:
                 db.close()

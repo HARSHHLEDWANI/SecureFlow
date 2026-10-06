@@ -21,7 +21,7 @@ import uuid
 from typing import Optional
 
 import jwt
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -47,6 +47,39 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 settings = get_settings()
 
 REFRESH_COOKIE = "sf_refresh"
+
+_dummy_hash_value: Optional[str] = None
+
+
+def _dummy_hash() -> str:
+    """A throwaway bcrypt hash, so unknown emails cost the same time as wrong passwords."""
+    global _dummy_hash_value
+    if _dummy_hash_value is None:
+        _dummy_hash_value = hash_password(secrets.token_hex(8))
+    return _dummy_hash_value
+
+
+def _cookie_attrs() -> dict:
+    samesite = settings.refresh_cookie_samesite.lower()
+    if samesite not in ("lax", "strict", "none"):
+        samesite = "lax"
+    return {"httponly": True, "samesite": samesite, "secure": settings.is_production or samesite == "none"}
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    # Browsers only delete a cookie when the attributes match the ones it was set with.
+    response.delete_cookie(REFRESH_COOKIE, **_cookie_attrs())
+
+
+def _require_allowed_origin(request: Request) -> None:
+    """Cookie-authenticated endpoints reject browser requests from foreign origins (CSRF).
+
+    Needed because ``SameSite=None`` (cross-site frontends) sends the cookie from any site.
+    Requests without an ``Origin`` header (non-browser clients) are not CSRF-able.
+    """
+    origin = request.headers.get("origin")
+    if origin and origin not in settings.cors_origins_list:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Origin not allowed")
 
 
 def _public(user: User) -> UserPublic:
@@ -116,14 +149,12 @@ def _issue_tokens(response: Response, user: User, family: Optional[str] = None) 
         response.set_cookie(
             REFRESH_COOKIE,
             refresh,
-            httponly=True,
-            samesite="lax",
-            secure=settings.is_production,
             max_age=settings.refresh_token_expire_days * 86400,
+            **_cookie_attrs(),
         )
     else:
         logger.warning("Refresh store unavailable - issuing access token only for %s", user.email)
-        response.delete_cookie(REFRESH_COOKIE)
+        _clear_refresh_cookie(response)
     return access
 
 
@@ -141,12 +172,14 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)) -> dict:
     ADMIN. There is no "first user wins": on a public URL that would hand the
     governance console to whoever arrives first.
     """
-    exists = db.scalar(select(func.count()).select_from(User).where(User.email == req.email))
+    exists = db.scalar(
+        select(func.count()).select_from(User).where(func.lower(User.email) == req.email)
+    )
     if exists:
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
 
     bootstrap = settings.bootstrap_admin_email.strip().lower()
-    is_bootstrap = bool(bootstrap) and req.email.strip().lower() == bootstrap
+    is_bootstrap = bool(bootstrap) and req.email == bootstrap  # req.email is already lower-cased
     user = User(
         email=req.email,
         password_hash=hash_password(req.password),
@@ -171,8 +204,12 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)) 
             "Too many failed logins for this account. Try again later.",
         )
 
-    user = db.execute(select(User).where(User.email == req.email)).scalar_one_or_none()
-    if user is None or not verify_password(req.password, user.password_hash):
+    user = db.execute(
+        select(User).where(func.lower(User.email) == req.email).order_by(User.created_at)
+    ).scalars().first()
+    # Always run one bcrypt verify so response time does not reveal whether the email exists.
+    password_ok = verify_password(req.password, user.password_hash if user else _dummy_hash())
+    if user is None or not password_ok:
         redis_client.rate_limit_hit(acct_key, settings.login_account_window_seconds)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
     redis_client.key_delete(acct_key)
@@ -230,6 +267,12 @@ def verify_step_up(req: StepUpRequest, response: Response, db: Session = Depends
     if session is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Challenge expired or invalid")
     if not secrets.compare_digest(str(session.get("otp")), req.otp):
+        # A 6-digit OTP must not be brute-forceable: burn the challenge after a few misses.
+        attempts = int(session.get("attempts", 0)) + 1
+        if attempts >= settings.stepup_max_attempts:
+            redis_client.delete_session(f"stepup:{req.challenge_id}")
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Too many incorrect codes; log in again")
+        redis_client.set_session(f"stepup:{req.challenge_id}", {**session, "attempts": attempts}, ttl=300)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect OTP")
 
     user = db.get(User, session["user_id"])
@@ -250,7 +293,7 @@ def verify_step_up(req: StepUpRequest, response: Response, db: Session = Depends
     )
 
 
-@router.post("/refresh")
+@router.post("/refresh", dependencies=[Depends(RateLimiter("refresh", limit=30)), Depends(_require_allowed_origin)])
 def refresh(
     response: Response,
     db: Session = Depends(get_db),
@@ -278,11 +321,11 @@ def refresh(
         raise HTTPException(status.HTTP_409_CONFLICT, "Refresh already in progress; retry")
     if state is rt.RefreshState.REUSED:
         rt.revoke_family(ident.fid)
-        response.delete_cookie(REFRESH_COOKIE)
+        _clear_refresh_cookie(response)
         logger.warning("Refresh-token reuse detected for user %s - family revoked", payload.get("sub"))
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token reuse detected; log in again")
     if state is not rt.RefreshState.ACTIVE:
-        response.delete_cookie(REFRESH_COOKIE)
+        _clear_refresh_cookie(response)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token is not valid; log in again")
 
     user = db.get(User, payload.get("sub"))
@@ -304,7 +347,7 @@ def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)) ->
     return envelope(pub.model_dump())
 
 
-@router.post("/logout")
+@router.post("/logout", dependencies=[Depends(_require_allowed_origin)])
 def logout(response: Response, sf_refresh: str | None = Cookie(default=None)) -> dict:
     """Revoke the refresh-token family server-side and clear the cookie."""
     if sf_refresh:
@@ -314,5 +357,5 @@ def logout(response: Response, sf_refresh: str | None = Cookie(default=None)) ->
             ident = None
         if ident is not None:
             rt.revoke_family(ident.fid)
-    response.delete_cookie(REFRESH_COOKIE)
+    _clear_refresh_cookie(response)
     return envelope({"loggedOut": True})

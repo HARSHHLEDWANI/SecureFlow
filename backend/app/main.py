@@ -35,6 +35,11 @@ API_PREFIX = "/api/v1"
 async def lifespan(app: FastAPI):
     """Initialise subsystems on startup, clean up on shutdown."""
     logger.info("Starting %s v%s (%s)", settings.app_name, __version__, settings.environment)
+    if settings.is_production:
+        problems = settings.insecure_production_settings()
+        if problems:
+            # Forgeable tokens (access, refresh, demo sessions) are worse than not starting.
+            raise RuntimeError("Refusing to start in production: " + "; ".join(problems))
     if settings.is_production and not settings.bootstrap_admin_email.strip():
         logger.warning(
             "BOOTSTRAP_ADMIN_EMAIL is not set: no account will be auto-promoted to ADMIN, "

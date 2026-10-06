@@ -463,3 +463,171 @@ def test_every_state_changing_route_requires_a_user_or_demo_token():
         if not guards & set(deps(route.dependant)):
             unguarded.append(f"{sorted(route.methods)} {route.path}")
     assert unguarded == []
+
+
+# ── Hostile-review regressions ──────────────────────────────────────────────────
+
+
+def test_case_variant_emails_cannot_duplicate_or_hijack_the_bootstrap_admin(client, monkeypatch):
+    boot = f"owner_{uuid.uuid4().hex[:6]}@test.com"
+    monkeypatch.setattr(get_settings(), "bootstrap_admin_email", boot)
+    local, domain = boot.split("@")
+    _, first = _register(client, f"{local.upper()}@{domain.upper()}")  # shouty casing
+    assert first["email"] == boot and first["role"] == "ADMIN"        # normalised: it IS the owner
+    dup = client.post(f"{API}/auth/register",
+                      json={"email": f"{local.title()}@{domain}", "password": PW, "vpa": "xx@okhdfc"})
+    assert dup.status_code == 409  # no second account under another casing, so no second ADMIN
+    assert _login(client, boot.upper()).status_code == 200  # login is case-insensitive too
+
+
+def test_legacy_mixed_case_accounts_can_still_log_in(client, monkeypatch):
+    _noon(monkeypatch)
+    from app.core.security import hash_password
+
+    email = f"Legacy_{uuid.uuid4().hex[:6]}@Test.com"  # stored before normalisation existed
+    db = SessionLocal()
+    try:
+        db.add(User(email=email, password_hash=hash_password(PW), vpa="l@okhdfc"))
+        db.commit()
+    finally:
+        db.close()
+    assert _login(client, email.lower()).status_code == 200
+
+
+def test_step_up_works_when_redis_is_down(client, monkeypatch):
+    """Fail-closed login must not become a permanent lockout during a Redis outage."""
+    _noon(monkeypatch)
+    email, _ = _register(client)
+    _redis_down(monkeypatch)
+    data = _login(client, email, device="new-dev").json()["data"]
+    assert data["step_up_required"] is True
+    done = client.post(f"{API}/auth/verify-step-up",
+                       json={"challenge_id": data["challenge_id"], "otp": data["demo_otp"]})
+    assert done.status_code == 200 and done.json()["data"]["access_token"]
+    assert client.cookies.get("sf_refresh") in (None, "")  # nothing verifiable to refresh with
+
+
+def test_step_up_challenge_is_destroyed_after_too_many_wrong_codes(client, monkeypatch):
+    _noon(monkeypatch)
+    email, _ = _register(client)
+    data = _login(client, email, device="new-dev").json()["data"]
+    cid, otp = data["challenge_id"], data["demo_otp"]
+    wrong = "000000" if otp != "000000" else "111111"
+    codes = [client.post(f"{API}/auth/verify-step-up", json={"challenge_id": cid, "otp": wrong}).status_code
+             for _ in range(5)]
+    assert codes[:4] == [401] * 4 and codes[4] == 400
+    assert client.post(f"{API}/auth/verify-step-up", json={"challenge_id": cid, "otp": otp}).status_code == 400
+
+
+def test_unknown_email_costs_one_password_verify_like_a_real_one(client, monkeypatch):
+    from app.api.routes import auth
+
+    calls = []
+    real = auth.verify_password
+    monkeypatch.setattr(auth, "verify_password", lambda pw, h: calls.append(h) or real(pw, h))
+    email, _ = _register(client)
+    _login(client, f"nobody_{uuid.uuid4().hex[:6]}@test.com", password="wrongpass1")
+    _login(client, email, password="wrongpass1")
+    assert len(calls) == 2  # both paths ran bcrypt, so timing does not reveal which emails exist
+
+
+def test_account_throttle_and_rate_limits_still_work_with_redis_down(client, monkeypatch):
+    from fastapi import HTTPException
+
+    _noon(monkeypatch)
+    monkeypatch.setattr(get_settings(), "login_account_limit", 3)
+    email, _ = _register(client)
+    _redis_down(monkeypatch)
+    for _ in range(3):
+        assert _login(client, email, password="wrongpass1").status_code == 401
+    assert _login(client, email).status_code == 429  # the control did not silently switch off
+
+    limiter = RateLimiter("redis-down-probe", limit=2)
+    for _ in range(2):
+        limiter(_req("198.51.100.1"))
+    with pytest.raises(HTTPException) as exc:
+        limiter(_req("198.51.100.1"))
+    assert exc.value.status_code == 429
+
+
+def test_cookie_endpoints_reject_foreign_origins(client):
+    for path in ("refresh", "logout"):
+        evil = client.post(f"{API}/auth/{path}", headers={"Origin": "https://evil.example"})
+        assert evil.status_code == 403, path
+    allowed = get_settings().cors_origins_list[0]
+    assert client.post(f"{API}/auth/refresh", headers={"Origin": allowed}).status_code == 401  # past the gate
+    assert client.post(f"{API}/auth/refresh").status_code == 401  # non-browser client: no Origin
+
+
+def test_refresh_cookie_supports_cross_site_frontends(client, monkeypatch):
+    _noon(monkeypatch)
+    monkeypatch.setattr(get_settings(), "refresh_cookie_samesite", "none")
+    email, _ = _register(client)
+    data = _login(client, email, device="new-dev").json()["data"]
+    res = client.post(f"{API}/auth/verify-step-up",
+                      json={"challenge_id": data["challenge_id"], "otp": data["demo_otp"]})
+    cookie = res.headers["set-cookie"].lower()
+    assert "samesite=none" in cookie and "secure" in cookie and "httponly" in cookie
+
+
+def test_production_refuses_default_or_weak_secrets(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    s = get_settings()
+    monkeypatch.setattr(s, "environment", "production")
+    monkeypatch.setattr(s, "jwt_secret", "change_me_in_production")
+    assert any("JWT_SECRET" in p for p in s.insecure_production_settings())
+    with pytest.raises(RuntimeError, match="Refusing to start"):
+        with TestClient(app):
+            pass
+
+    monkeypatch.setattr(s, "jwt_secret", "a" * 40)
+    monkeypatch.setattr(s, "jwt_refresh_secret", "a" * 40)
+    assert any("must differ" in p for p in s.insecure_production_settings())
+    monkeypatch.setattr(s, "jwt_refresh_secret", "b" * 40)
+    assert s.insecure_production_settings() == []
+
+
+def test_prediction_cache_is_keyed_by_model_version(fake_redis):
+    from app.core.pipeline import predict_cached
+    from app.ml.model import get_model_service
+
+    predict_cached({"amount_inr": 1234.5, "txn_type": "P2P", "hour": 11})
+    version = get_model_service().version
+    keys = list(fake_redis.keys("prediction:*"))
+    assert keys and all(k.startswith(f"prediction:{version}:") for k in keys)
+
+
+def _ledger_for_test():
+    import os
+    import tempfile
+
+    from app.core.audit_ledger import AuditLedger
+
+    return AuditLedger(os.path.join(tempfile.mkdtemp(), "c.json"), difficulty=1)
+
+
+def test_failed_mine_does_not_strand_a_record_in_pending(monkeypatch):
+    ledger = _ledger_for_test()
+    real = ledger._persist_to_file
+
+    def boom():
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ledger, "_persist_to_file", boom)
+    with pytest.raises(OSError):
+        ledger.mine_block({"transaction_id": "lost"})
+    assert ledger.pending == []
+    monkeypatch.setattr(ledger, "_persist_to_file", real)
+    assert len(ledger.chain) == 1  # memory did not run ahead of the failed write
+    ok = ledger.mine_block({"transaction_id": "next"})
+    assert [t.get("transaction_id") for t in ok.transactions] == ["next"]  # not ["lost", "next"]
+
+
+def test_model_metrics_endpoint_omits_bulky_sweeps(auth_client):
+    client, headers, _ = auth_client
+    m = client.get(f"{API}/analytics/model-metrics", headers=headers).json()["data"]
+    assert "threshold_sweep" not in m and "sweep" not in m.get("operating_threshold", {})
+    assert m["headline"]["metric"] == "pr_auc" and "risk_thresholds" in m

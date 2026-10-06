@@ -158,9 +158,20 @@ def load_frozen_sets() -> tuple[pd.DataFrame, pd.DataFrame]:
     return pd.read_parquet(settings.train_pool_path), pd.read_parquet(settings.holdout_path)
 
 
+_hash_cache: dict[tuple[str, int, int], str] = {}
+
+
 def holdout_hash() -> Optional[str]:
+    """Digest of the frozen holdout, recomputed only if the file's mtime/size change."""
     path = get_settings().holdout_path
-    return file_digest(path) if os.path.exists(path) else None
+    if not os.path.exists(path):
+        return None
+    st = os.stat(path)
+    key = (path, st.st_mtime_ns, st.st_size)
+    if key not in _hash_cache:
+        _hash_cache.clear()
+        _hash_cache[key] = file_digest(path)
+    return _hash_cache[key]
 
 
 def run_feedback_retrain(db: Session, fast: bool = False) -> dict[str, Any]:

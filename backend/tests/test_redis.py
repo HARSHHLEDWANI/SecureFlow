@@ -1,5 +1,5 @@
 """Redis helper operations (against fakeredis) and graceful fallback."""
-from app.core.redis_client import RedisClient, redis_client
+from app.core.redis_client import RedisClient, _LocalStore, redis_client
 
 
 def test_json_cache_roundtrip(fake_redis):
@@ -43,7 +43,10 @@ def test_graceful_fallback_when_unavailable():
     down = RedisClient.__new__(RedisClient)
     down._client = None
     down._warned = False
+    down._local = _LocalStore()
     assert down.cache_get_json("x") is None
-    assert down.rate_limit_hit("x", 60) == 0  # fail-open
+    # Rate limits no longer fail open: they degrade to an in-process counter.
+    assert [down.rate_limit_hit("x", 60) for _ in range(3)] == [1, 2, 3]
+    assert down.counter_get("x") == 3
     assert down.velocity_count("u", 3600) is None
     assert down.publish_alert({"a": 1}) is False
