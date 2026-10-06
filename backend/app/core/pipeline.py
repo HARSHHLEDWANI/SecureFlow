@@ -202,6 +202,8 @@ def gather_signals(
             )
         else:
             geo_distance, minutes_since_last = 0.0, 24 * 60.0
+        # A Lab preset pins its own cadence so it does not depend on the previous payment.
+        minutes_since_last = float(overrides.get("minutes_since_last", minutes_since_last))
 
     # New-device flag — Redis device set, DB fallback, override wins.
     if "is_new_device" in overrides:

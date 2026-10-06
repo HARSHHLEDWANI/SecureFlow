@@ -631,3 +631,30 @@ def test_model_metrics_endpoint_omits_bulky_sweeps(auth_client):
     m = client.get(f"{API}/analytics/model-metrics", headers=headers).json()["data"]
     assert "threshold_sweep" not in m and "sweep" not in m.get("operating_threshold", {})
     assert m["headline"]["metric"] == "pr_auc" and "risk_thresholds" in m
+
+
+def test_attacker_cannot_lock_the_real_user_out_of_their_usual_network(client, monkeypatch):
+    from app.api.routes import auth
+
+    _noon(monkeypatch)
+    s = get_settings()
+    monkeypatch.setattr(s, "login_account_limit", 3)
+    monkeypatch.setattr(s, "login_trusted_ip_multiplier", 5)
+    where = {"ip": "203.0.113.10"}  # the victim's home network
+    monkeypatch.setattr(auth, "client_ip", lambda request: where["ip"])
+    email, _ = _register(client)
+    _full_login(client, email, device="home-laptop")  # victim logs in once: that IP becomes familiar
+
+    where["ip"] = "198.51.100.66"  # attacker, elsewhere, burns the account's failure budget
+    for _ in range(3):
+        assert _login(client, email, password="wrongpass1").status_code == 401
+    assert _login(client, email).status_code == 429          # the attacker's address is locked out...
+
+    where["ip"] = "203.0.113.10"
+    assert _login(client, email, device="home-laptop").status_code == 200  # ...the victim is not
+
+    # A familiar address is not a free pass: guessing from it is bounded at 5x the limit.
+    # (The victim's successful login reset the counter; 15 wrong guesses reach 5 x 3.)
+    for _ in range(15):
+        assert _login(client, email, password="wrongpass1").status_code == 401
+    assert _login(client, email, device="home-laptop").status_code == 429

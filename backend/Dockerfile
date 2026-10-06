@@ -17,8 +17,9 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY . .
 
-# Train the model at build time so a model artifact ships in the image.
-RUN python -m app.ml.training || echo "Model training skipped"
+# Train the model at build time so a model artifact ships in the image. A failure must fail
+# the build: skipping it would ship an image that silently serves heuristic scores.
+RUN python -m app.ml.training
 
 EXPOSE 8000
 

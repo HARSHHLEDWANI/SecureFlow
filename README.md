@@ -47,25 +47,31 @@ so the system stays correct (just slower) if Redis is down.
 
 ## Features
 
-- **ML fraud scoring** — a `RandomForestClassifier` (tuned via 5-fold cross-validated grid
-  search) plus an unsupervised `IsolationForest` anomaly detector, trained on 12,000
-  synthetic UPI transactions with realistic, independently-generated fraud archetypes
-  (account takeover, scam payments, impossible travel, micro-testing). Test AUC-ROC ≈ 0.95.
+- **ML fraud scoring** — an isotonic-calibrated `RandomForestClassifier` (grid-searched on
+  PR-AUC with a forward-chaining split) plus an unsupervised `IsolationForest`. The model
+  that drives the demo and UPI Lab is trained on 12,000 *synthetic* UPI transactions, so its
+  metrics are **not** performance claims. Credible evaluation uses the PaySim benchmark
+  (`python -m app.ml.training --dataset paysim`: chronological split, PR-AUC / precision@k /
+  recall at fixed FPR, cost-based thresholds) and has not been run on real PaySim yet. See
+  [`docs/MODEL_CARD.md`](docs/MODEL_CARD.md).
 - **Composite risk engine** — blends the ML signals with velocity, geo-velocity
   (impossible-travel), device-trust, amount-anomaly, and time-of-day into a 0–100 score
   with tiered actions: **LOW → allow**, **MEDIUM → step-up OTP**, **HIGH → block + alert**.
-- **Custom blockchain** — genuine SHA-256 proof-of-work chain with genesis block, chain
-  validation, and tamper detection. Storage is pluggable: a local JSON file in dev/tests,
-  and a durable `chain_blocks` table in Postgres in production, so the audit trail survives
-  redeploys on ephemeral hosting.
+- **Tamper-evident audit ledger** — a hash-linked, proof-of-work-sealed, append-only log with
+  a Merkle root per block. Edits to past records are detectable; it is *not* a distributed
+  blockchain (single writer, no consensus, no Byzantine fault tolerance). Storage is
+  pluggable: a local JSON file in dev/tests (single process), and a `chain_blocks` table in
+  Postgres in production, where mining is multi-process safe (advisory lock + primary key).
 - **Redis everywhere** — prediction & dashboard caching, fixed-window rate limiting,
   session/step-up state, velocity sorted-sets, device sets, geo cache, and a
   `fraud:alerts` pub/sub bus.
 - **Role-based access control** — VIEWERs see only their own transactions/risk profile;
   ANALYST/ADMIN get full fraud-ops visibility (analytics, blockchain explorer, all
   transactions); governance is restricted to the council + main admin.
-- **Risk-based authentication** — logins are themselves scored; unrecognised devices
-  trigger step-up OTP verification.
+- **Risk-based authentication** — logins are themselves scored; unrecognised (or unverifiable)
+  devices trigger step-up OTP verification, which fails closed when Redis is down. Refresh
+  tokens rotate with reuse detection; failed logins are throttled per account and per IP;
+  only `BOOTSTRAP_ADMIN_EMAIL` is promoted to ADMIN.
 - **Real-time alerts** — authenticated WebSocket stream (`/ws/alerts`, token required)
   bridged to Redis pub/sub.
 - **Distinctive dark security UI** — a public landing page with a scroll-driven pipeline
@@ -119,7 +125,9 @@ false positives). The presets reflect that:
 | 🔴 Account Takeover | New device + new city + high amount + 2:30 AM | 🚫 Blocked (critical) |
 | ⚡ Rapid-Fire | 10 escalating txns from a bot device | Escalates ✅ → ⚠️ → 🚫 |
 
-**See it live** — the Lab is a public, unauthenticated route: open `/lab` (or click
+**See it live** — the Lab is a public route (reads are open; its writes use a short-lived
+demo session fetched automatically, are rate-limited and capped, and are flagged `is_demo` so
+they never touch real analytics): open `/lab` (or click
 **Try the Live Demo** on the landing page) and run the **Guided Demo**. Screenshots/GIFs
 can be captured from a running instance and dropped into `docs/img/`.
 
@@ -162,11 +170,11 @@ rogue tamper* and watch the watchdog restore it from the chain on its own.
 | UI motion   | Framer Motion, React Three Fiber + drei (3D), Lenis (smooth scroll) |
 | Backend     | Python 3.11, FastAPI, Uvicorn, Pydantic v2                        |
 | ML          | scikit-learn (RandomForest + IsolationForest), NumPy, pandas      |
-| Data        | SQLAlchemy 2.0 + Alembic · PostgreSQL (prod) / SQLite (dev)       |
+| Data        | SQLAlchemy 2.0 · PostgreSQL (prod) / SQLite (dev) · Alembic declared, migrations not yet wired |
 | Cache / RT  | Redis 7 (redis-py)                                                |
-| Blockchain  | Custom Python SHA-256 proof-of-work chain                         |
+| Audit ledger| Hash-linked PoW ledger with Merkle roots (tamper-evident)         |
 | Auth        | JWT (PyJWT) + bcrypt                                              |
-| Tests       | pytest, httpx, fakeredis (82 tests)                               |
+| Tests       | pytest, httpx, fakeredis (193 tests; also run on Postgres)        |
 
 ---
 
@@ -277,10 +285,10 @@ velocity (15), geo (12), new-device (8), amount (6), time (4) → 0–100 → ti
 ## API
 
 `POST /api/v1/transaction/analyze` · `GET /api/v1/transaction/{id}/status` ·
-`GET /api/v1/risk-score/{user_id}` · `POST /api/v1/auth/{register,login,verify-step-up,refresh}` ·
-`GET /api/v1/blockchain/{chain,validate,stats,block/{i}}` ·
+`GET /api/v1/risk-score/{user_id}` · `POST /api/v1/auth/{register,login,verify-step-up,refresh,logout}` ·
+`GET /api/v1/audit-ledger/{chain,validate,stats,block/{i}}` (`/blockchain/*` is an alias) ·
 `GET /api/v1/analytics/{dashboard,recent-alerts,model-metrics}` ·
-`GET /api/v1/upi/{users,scenarios}` · `POST /api/v1/upi/{pay,scenario/{id},rapid-fire,reset}` ·
+`GET /api/v1/upi/{users,scenarios}` · `POST /api/v1/upi/session` · `POST /api/v1/upi/{pay,scenario/{id},rapid-fire,reset}` (need `X-Demo-Session`) ·
 `GET /api/v1/upi/{user/{vpa}/history,pipeline-status/{txn}}` ·
 `GET /api/v1/governance/{council,proposals,watchdog}` ·
 `POST /api/v1/governance/{proposals,proposals/{id}/vote,integrity/{txn}/rollback,integrity/{txn}/simulate-tamper,watchdog/scan}` ·
@@ -293,7 +301,8 @@ Full interactive spec at `/docs` (Swagger) and `/redoc`.
 ## Tests
 
 ```bash
-cd backend && pytest -q          # 82 tests: blockchain, ML, redis, risk engine, API, authz, WebSocket, UPI Lab, Governance
+cd backend && pytest -q          # 193 tests: ledger, ML, redis, risk engine, API, authz, security, WebSocket, UPI Lab, Governance
+# Against Postgres: TEST_DATABASE_URL=postgresql+psycopg2://user:pw@localhost:5432/db pytest -q
 ```
 
 ---

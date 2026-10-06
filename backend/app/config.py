@@ -97,6 +97,11 @@ class Settings(BaseSettings):
     # independent of the source IP.
     login_account_limit: int = 10
     login_account_window_seconds: int = 900
+    # An IP that already completed a login for the account is "familiar": it is only locked
+    # out at this multiple of the limit, so an attacker burning the account's budget from
+    # elsewhere cannot lock the real user out of their usual network.
+    login_trusted_ip_multiplier: int = 5
+    login_trusted_ip_days: int = 30
 
     # Bootstrap admin: the ONLY email promoted to ADMIN on registration. Everyone
     # else registers as VIEWER. Unset in production => nobody is auto-promoted.

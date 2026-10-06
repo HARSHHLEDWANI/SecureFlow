@@ -31,7 +31,7 @@ from app.core import refresh_tokens as rt
 from app.core.redis_client import redis_client
 from app.core.security import create_token, decode_token, hash_password, verify_password
 from app.database import Role, Transaction, User, get_db
-from app.dependencies import RateLimiter, envelope, get_current_user
+from app.dependencies import RateLimiter, client_ip, envelope, get_current_user
 from app.models.user import (
     LoginRequest,
     LoginResponse,
@@ -163,6 +163,16 @@ def _account_key(email: str) -> str:
     return f"ratelimit:acct:{digest}:login"
 
 
+def _familiar_ip_key(email: str, request: Request) -> str:
+    acct = hashlib.sha256(email.strip().lower().encode()).hexdigest()[:32]
+    ip = hashlib.sha256(client_ip(request).encode()).hexdigest()[:16]
+    return f"familiar_ip:{acct}:{ip}"
+
+
+def _remember_familiar_ip(email: str, request: Request) -> None:
+    redis_client.flag_set(_familiar_ip_key(email, request), settings.login_trusted_ip_days * 86400)
+
+
 @router.post("/register", status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(RateLimiter("register"))])
 def register(req: RegisterRequest, db: Session = Depends(get_db)) -> dict:
@@ -195,10 +205,15 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/login", dependencies=[Depends(RateLimiter("login"))])
-def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)) -> dict:
+def login(
+    req: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)
+) -> dict:
     """Authenticate, returning a token or a step-up challenge by risk tier."""
     acct_key = _account_key(req.email)
-    if redis_client.counter_get(acct_key) >= settings.login_account_limit:
+    limit = settings.login_account_limit
+    if redis_client.flag_get(_familiar_ip_key(req.email, request)):
+        limit *= settings.login_trusted_ip_multiplier  # the real user's usual network
+    if redis_client.counter_get(acct_key) >= limit:
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
             "Too many failed logins for this account. Try again later.",
@@ -249,6 +264,7 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)) 
     # LOW risk - log in directly.
     access = _issue_tokens(response, user)
     redis_client.add_device(user.id, req.device_id)
+    _remember_familiar_ip(user.email, request)
     return envelope(
         LoginResponse(
             access_token=access,
@@ -261,7 +277,9 @@ def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)) 
 
 
 @router.post("/verify-step-up", dependencies=[Depends(RateLimiter("stepup"))])
-def verify_step_up(req: StepUpRequest, response: Response, db: Session = Depends(get_db)) -> dict:
+def verify_step_up(
+    req: StepUpRequest, request: Request, response: Response, db: Session = Depends(get_db)
+) -> dict:
     """Complete a MEDIUM-risk login by verifying the OTP challenge."""
     session = redis_client.get_session(f"stepup:{req.challenge_id}")
     if session is None:
@@ -282,6 +300,7 @@ def verify_step_up(req: StepUpRequest, response: Response, db: Session = Depends
     redis_client.delete_session(f"stepup:{req.challenge_id}")
     access = _issue_tokens(response, user)
     redis_client.add_device(user.id, session.get("device_id", "web-default"))
+    _remember_familiar_ip(user.email, request)
     return envelope(
         LoginResponse(
             access_token=access,

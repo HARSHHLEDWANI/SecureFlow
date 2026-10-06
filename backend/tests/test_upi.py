@@ -183,3 +183,18 @@ def test_reset_reseeds_demo_users(client):
     data = _data(client.post(f"{PREFIX}/reset"))
     assert data["reset"] is True
     assert data["users_seeded"] >= 5
+
+
+@pytest.mark.parametrize(
+    "scenario_id,lo,hi",
+    [("normal", 0, 20), ("high_amount", 38, 62), ("new_device_high_value", 38, 62),
+     ("midnight_anomaly", 38, 62), ("impossible_travel", 78, 100), ("account_takeover", 78, 100)],
+)
+def test_scenarios_sit_well_inside_their_tier(client, scenario_id, lo, hi):
+    """Margins matter: a scenario 2 points from a cutoff flips when the model is retrained.
+
+    Cutoffs are 30/70; each preset must stay >= 8 points from the boundaries of its tier
+    (measured across a fresh model and a feedback-promoted one).
+    """
+    data = _data(client.post(f"{PREFIX}/scenario/{scenario_id}"))
+    assert lo <= data["result"]["risk_score"] <= hi, data["result"]["risk_score"]

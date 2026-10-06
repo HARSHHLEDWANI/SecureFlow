@@ -162,6 +162,15 @@ class UPISimulator:
             results = self.run_rapid_fire(db, scenario_id)
             return {"scenario": _scenario_public(scn), "results": results, "rapid_fire": True}
 
+        spec = DEMO_USER_BY_VPA[scn["sender"]]
+        # Presets run against the user's *profile*, not their accumulated history: amount
+        # statistics and time-since-last drift with every earlier payment, which would make a
+        # scenario's score (and tier) depend on what ran before it. Scenario overrides win.
+        baseline = {
+            "user_avg_amount": float(spec["avg_transaction"]),
+            "user_std_amount": float(spec["amount_spread"]),
+            "minutes_since_last": 12 * 60.0,
+        }
         result = self.process_payment(
             db,
             sender_vpa=scn["sender"],
@@ -171,7 +180,7 @@ class UPISimulator:
             note=scn["name"],
             city=scn.get("city"),
             device_id=scn.get("device"),
-            signal_overrides=scn.get("signal_overrides"),
+            signal_overrides={**baseline, **(scn.get("signal_overrides") or {})},
         )
         return {
             "scenario": _scenario_public(scn),

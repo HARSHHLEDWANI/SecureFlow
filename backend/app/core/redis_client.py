@@ -187,6 +187,16 @@ class RedisClient:
 
         return self._safe(_do, default=None)
 
+    def flag_set(self, key: str, ttl: int) -> None:
+        """Remember a boolean for ``ttl`` seconds (Redis, or process memory if unavailable)."""
+        if not self._safe(lambda c: bool(c.setex(key, ttl, "1")), default=False):
+            self._local.set(key, 1, ttl)
+
+    def flag_get(self, key: str) -> bool:
+        if self._safe(lambda c: c.get(key)) is not None:
+            return True
+        return self._local.get(key) is not None
+
     def key_set(self, key: str, value: str, ttl: int) -> bool:
         """Store ``value`` for ``ttl`` seconds. False if Redis is unavailable."""
         return bool(self._safe(lambda c: c.setex(key, ttl, value), default=False))

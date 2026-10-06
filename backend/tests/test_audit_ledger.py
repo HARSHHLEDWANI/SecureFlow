@@ -126,6 +126,13 @@ def _db_ledger() -> AuditLedger:
     return AuditLedger("unused", difficulty=2, storage="db")
 
 
+def _is_postgres() -> bool:
+    from app.database import engine
+
+    return engine.dialect.name == "postgresql"
+
+
+@pytest.mark.skipif(_is_postgres(), reason="Postgres' advisory lock prevents this race outright")
 def test_losing_writer_reloads_the_tip_and_remines(db_chain_table, monkeypatch):
     """Worker A is mid-proof-of-work when worker B appends: A must not fork the chain."""
     a, b = _db_ledger(), _db_ledger()
@@ -159,6 +166,39 @@ def test_losing_writer_reloads_the_tip_and_remines(db_chain_table, monkeypatch):
     assert fresh.validate_chain() and fresh.tamper_detection() is None
     assert [blk.transactions[0].get("transaction_id") for blk in fresh.chain[1:]] == ["from-B", "from-A"]
     assert [blk.index for blk in a.chain] == [0, 1, 2]  # A synced B's block into memory
+
+
+@pytest.mark.skipif(not _is_postgres(), reason="needs Postgres (run with TEST_DATABASE_URL)")
+def test_postgres_advisory_lock_serialises_writers_across_workers(db_chain_table, monkeypatch):
+    """While A is sealing a block, B must WAIT on the advisory lock instead of racing."""
+    import time
+
+    a, b = _db_ledger(), _db_ledger()
+    a_mining, calls = threading.Event(), []
+    real_mine = a._mine
+
+    def slow_mine(block):
+        calls.append(block.index)
+        a_mining.set()
+        time.sleep(1.5)  # hold the advisory lock for a while
+        return real_mine(block)
+
+    monkeypatch.setattr(a, "_mine", slow_mine)
+    out = {}
+    ta = threading.Thread(target=lambda: out.update(a=a.mine_block({"transaction_id": "from-A"})))
+    ta.start()
+    assert a_mining.wait(10)
+    t0 = time.monotonic()
+    out["b"] = b.mine_block({"transaction_id": "from-B"})  # blocks on pg_advisory_xact_lock
+    waited = time.monotonic() - t0
+    ta.join(15)
+
+    assert waited > 0.8                                   # B really did wait for A
+    assert calls == [1]                                   # A never lost a race (no wasted re-mine)
+    assert (out["a"].index, out["b"].index) == (1, 2)
+    assert out["b"].previous_hash == out["a"].hash        # B built on A's block, not on a stale tip
+    fresh = _db_ledger()
+    assert fresh.validate_chain() and [x.index for x in fresh.chain] == [0, 1, 2]
 
 
 def test_two_concurrent_writers_still_produce_a_valid_chain(db_chain_table):

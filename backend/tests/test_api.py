@@ -35,7 +35,7 @@ def test_register_first_user_is_no_longer_admin(client):
 
 
 def test_register_rejects_duplicate_email(client):
-    body = {"email": "dup@test.com", "password": "password123", "vpa": "tester@okhdfc"}
+    body = {"email": f"dup_{uuid.uuid4().hex[:8]}@test.com", "password": "password123", "vpa": "tester@okhdfc"}
     assert client.post("/api/v1/auth/register", json=body).status_code == 201
     assert client.post("/api/v1/auth/register", json=body).status_code == 409
 

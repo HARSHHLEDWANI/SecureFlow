@@ -5,7 +5,8 @@ import uuid
 
 # Configure an isolated environment BEFORE the app modules are imported.
 _TMP = tempfile.mkdtemp(prefix="sf_test_")
-os.environ["DATABASE_URL"] = f"sqlite:///{os.path.join(_TMP, 'test.db')}"
+# TEST_DATABASE_URL points the whole suite at a real database (e.g. Postgres) instead of SQLite.
+os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL") or f"sqlite:///{os.path.join(_TMP, 'test.db')}"
 os.environ["BLOCKCHAIN_PATH"] = os.path.join(_TMP, "chain.json")
 os.environ["BLOCKCHAIN_DIFFICULTY"] = "2"
 os.environ["RATE_LIMIT_REQUESTS"] = "1000"
